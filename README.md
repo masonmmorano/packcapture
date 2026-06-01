@@ -15,18 +15,21 @@
   <img alt="Built with OpenCV" src="https://img.shields.io/badge/CV-OpenCV-5C3EE8?style=flat-square&logo=opencv&logoColor=white">
   <a href="https://pokemontcg.io"><img alt="Data: Pokémon TCG API" src="https://img.shields.io/badge/data-Pok%C3%A9mon%20TCG%20API-EF5350?style=flat-square"></a>
   <img alt="Status: early development" src="https://img.shields.io/badge/status-early%20development-orange?style=flat-square">
-  &nbsp;<img alt="Supported set: Phantasmal Flames" src="assets/phantasmalflames.png" height="20">
 </p>
 
 > **Status:** early. Phase 1 (offline set bundles) and Phase 2 (static image
 > recognition) are implemented. Live video, session tracking, export, and UI
 > are next — see [CLAUDE.md](CLAUDE.md) for the full plan and build order.
 
-## Supported sets
+## Supported packs
+
+<img src="assets/phantasmalflames.png" alt="Phantasmal Flames" width="130" align="left" hspace="16" vspace="4">
 
 **Phantasmal Flames** (`me2`) — the first fully supported set. Its recognition
 bundle ships in the repo, so recognition works out of the box with no API key
 and no build step. More sets will be delivered as downloadable bundles.
+
+<br clear="left">
 
 
 ## How recognition works
