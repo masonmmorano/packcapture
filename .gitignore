@@ -11,7 +11,9 @@ venv/
 .mypy_cache/
 
 # PackCapture
-# Built set bundles can be large; ship them as GitHub release assets, not in git.
+# Built set bundles are ignored by default (local/scratch builds). Prebuilt
+# bundles for supported sets are force-added (git add -f sets/<code>) and tracked
+# thereafter; long-term these migrate to GitHub release assets + auto-fetch.
 sets/
 *.npy
 *.db

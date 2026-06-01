@@ -1,0 +1,12 @@
+{
+  "set_code": "me2",
+  "set_name": "Phantasmal Flames",
+  "card_count": 130,
+  "feature_count": 129915,
+  "cards_without_features": 0,
+  "orb_nfeatures": 1000,
+  "work_height": 600,
+  "image_size": "large",
+  "schema_version": 1,
+  "build_date": "2026-06-01T17:24:43+00:00"
+}
