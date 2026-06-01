@@ -67,8 +67,85 @@ Implemented:
 - `packcapture list-sets` — lists locally built bundles.
 - Network-free synthetic end-to-end test in `tests/test_pipeline.py`.
 
-Next up: validate accuracy on real card photos (Phase 2 acceptance), then start
-the live video pipeline (Phase 3).
+Next up: build the Phase 3 live pipeline core (zone mode) and validate against a
+real pack-opening video.
+
+## Focus set: Phantasmal Flames (`me2`)
+
+First set to support end-to-end. Mega Evolution series, released 2025-11-14.
+130 cards (94 numbered + secret rares). Bundle is built locally.
+- Rarity distribution: 43 Common, 31 Uncommon, 56 Rare-or-higher
+  (Rare 10, Double Rare 10, Illustration Rare 13, Ultra Rare 17,
+  Special Illustration Rare 5, Mega Hyper Rare 1).
+- Exactly 1 Energy-supertype card — so the *inserted* basic energy in a pack
+  will not false-match a set card; the count-to-10 stays robust.
+
+## Phase 3 design (decided)
+
+### Two modes, one core
+The recognizer + variant logic + session/stats live behind a swappable front end:
+
+```
+[frame source] -> [card-ready detector] -> [recognize + variant] -> [dedupe/count] -> [session] -> [export]
+      |                    |
+ webcam/OBS/video    ZONE (v1)  ->  CENTER-FRAME RIP (end goal)
+```
+
+- **Zone mode (v1):** user drags a detection box once; rips packs to the side and
+  throws each card onto a growing stack inside the box (box always frames the top
+  card). When the stack gets tall/messy they shove it aside and start a new one.
+- **Rip mode (end goal):** detect cards live, center-frame, as the pack is ripped.
+  The user should trust it enough to "rip away and not touch it." Same core; only
+  the detector box changes. This is the ultimate goal — zone mode is the scaffold
+  that proves the core and gives us a tuning harness.
+- OBS virtual cam appears to OpenCV as just another webcam, so webcam + OBS are
+  one code path (`cv2.VideoCapture`). A **video file path uses the same path**, so
+  we can replay YouTube pack-opening clips frame-for-frame for testing/tuning.
+
+### Pack model (the leverage)
+Every booster = 10 tracked cards in a fixed structure, plus 1 inserted basic
+energy + 1 code card (both worthless / excluded):
+
+| Slot | Contents | Variant label source |
+|------|----------|----------------------|
+| 1-4  | Commons (circle)        | normal (matched rarity confirms) |
+| 5-7  | Uncommons (diamond)     | normal (matched rarity confirms) |
+| 8-9  | **Reverse Holos** (any rarity) | **slot position** (only reliable signal) |
+| 10   | Rare / Holo / ex / SIR+ (star) | matched rarity confirms (rare+) |
+
+- **Variant by position is primary.** ORB identifies *which* card; the card's own
+  rarity (from the bundle) gives base rarity; **position** is the only reliable
+  way to mark the 2 reverse-holo slots (a reverse holo can be any base rarity).
+  Relies on factory order being preserved (true when flipping straight off the
+  top, which is how packs come ordered).
+- **Per-pack checksum:** expect exactly 4 base-Common + 3 base-Uncommon + 1 Rare+
+  + 2 reverses = 10. If a pack doesn't reconcile, flag it (don't silently log).
+  This is what lets a ripper not babysit it — the program knows when it missed one.
+- **Foil detection is scoped, not deferred:** shine can only appear in the last 3
+  real cards (slots 8-10). Run foil detection only there, as confirmation of the
+  position inference; foil firing in slots 1-7 is itself an error signal. Caveat:
+  holo shimmer is easy to detect in motion (rip mode) and hard on a flat still
+  card (zone mode), so in zone mode position stays primary and foil is best-effort.
+- **Counting is lazy-proof:** only set-matching Pokémon cards count toward 10.
+  Code card and inserted basic energy don't match `me2` -> tagged and excluded,
+  whether or not the user pre-removed them. A missed/low-confidence real card
+  shows up as a pack that closes at <10 -> flagged by the checksum.
+- The slot template is **configurable per set** (a few sets / promo configs differ).
+
+### Debounce / dedupe
+Zone mode reduces dedupe to a motion-settle state machine on the ROI: watch for
+motion, and emit exactly one recognition per motion->settle transition (one card
+thrown = one settle event = one emit). A card lingering in frame never re-emits
+because no new motion->settle cycle occurs. Implemented in `pipeline/settle.py`.
+
+### UI
+v1 = a single OpenCV display window (drag-to-select ROI via `cv2.selectROI`, live
+feed + text overlay + keyboard hotkeys to confirm/correct/skip). No extra GUI
+dependency. The polished UI (set picker, report screen) stays Phase 6.
+
+### Schema additions planned
+Store `supertype` in the bundle (helps classify energy), and add `variant`/
+`is_holo` columns to the session log.
 
 ## Repo layout
 

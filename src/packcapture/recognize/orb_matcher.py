@@ -44,7 +44,12 @@ class Matcher:
         self.bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
 
     def match_image(self, image_path: Union[str, Path], top: int = 5) -> list[MatchResult]:
-        gray = prep(load_gray(image_path))
+        return self.match_array(load_gray(image_path), top=top)
+
+    def match_array(self, image: np.ndarray, top: int = 5) -> list[MatchResult]:
+        """Match an in-memory image (BGR or grayscale) — used by the live pipeline."""
+        gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        gray = prep(gray)
         qkp, qdesc = detect(self.orb, gray)
         return self.match_descriptors(qdesc, qkp, top=top)
 
