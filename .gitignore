@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# PackCapture
+# Built set bundles can be large; ship them as GitHub release assets, not in git.
+sets/
+*.npy
+*.db
+!tests/**/*.db
+
+# Local scratch / sample captures
+scratch/
+samples/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
