@@ -3,6 +3,54 @@
 > Persistent context for Claude Code sessions. This is the source of truth for
 > what PackCapture is and how it's being built.
 
+## Session log & how to resume
+
+**Repo:** https://github.com/masonmmorano/packcapture (public). Local:
+`C:\Users\Mason\Documents\repositories\packcapture`.
+
+**To resume this work:** open a terminal in the repo folder and run
+`claude --continue` (picks up the most recent session here) or `claude --resume`
+(choose this session from a list). CLAUDE.md loads automatically either way.
+
+### Done so far (as of 2026-06-01)
+- **Repo + tooling:** public GitHub repo; Python 3.10 venv; deps (opencv,
+  numpy, requests, tqdm, pytest, yt-dlp); ffmpeg installed; gh CLI installed and
+  authed (scopes: repo, workflow). Commits use the GitHub noreply email and
+  carry no AI attribution (see memory).
+- **Phase 1 — `build-set`:** fetch a set from pokemontcg.io, precompute ORB
+  descriptors/keypoints, write the bundle. Built `me2` (Phantasmal Flames, 130
+  cards) and committed it in-repo for zero-setup recognition.
+- **Phase 2 — matcher:** set-locked ORB (Lowe ratio + RANSAC). **Validated on
+  real footage** — Murkrow #57 recognized at 51 inliers from a real overhead-cam
+  frame (see "Recognition validated on real footage" below).
+- **Phase 3 core (started):** `capture/source.py` (FrameSource: webcam/OBS/video
+  file) and `pipeline/settle.py` (motion-settle/debounce state machine), with
+  tests. `Matcher.match_array()` added for in-memory ROIs.
+- **Quality:** 4 pytest tests green; **test CI live** on GitHub Actions (Ubuntu
+  + Windows, py3.10/3.12).
+- **Docs/brand:** README with badges, squared pokeball logo, "Supported packs"
+  section with pack art; MIT LICENSE.
+
+### Next up (in priority order)
+1. **Phase 3 build-out:** variant-by-position + per-pack checksum session layer;
+   wire FrameSource -> settle -> matcher -> session; an OpenCV confirm-window UI
+   (cv2.selectROI to draw the zone, live overlay, hotkeys to confirm/correct).
+2. **Confidence gate:** use the validated threshold (inliers >= ~25 AND clear
+   margin over runner-up; noise floor ~15).
+3. **Session DB + pull-rate stats**, then **CSV/JSON export** (Phases 4-5).
+4. **Set-bundling CI** (designed, not built): manual-trigger workflow that builds
+   the latest set and publishes the bundle as a GitHub release asset, plus a
+   `packcapture fetch-set <code>` command. User wants "latest set only" first.
+5. **Coverage badge** once pytest-cov is added to CI.
+
+### Open items / gotchas
+- More YouTube footage needs `--cookies-from-browser` (bot challenge) and the
+  tool sandbox disabled (CDN blocked); a phone photo of a real card dropped into
+  the repo is the fastest clean test input.
+- Local-only scratch (git-ignored): `scratch/footage/` has `diag2.mp4` (working
+  10s clip) + extracted `frames/`; helper scripts `scratch/extract_frames.py`,
+  `match_frames.py`, `match_crop.py`.
+
 ## What it is
 
 An open-source desktop tool for Pokémon TCG pack rippers to automatically detect
@@ -79,6 +127,32 @@ First set to support end-to-end. Mega Evolution series, released 2025-11-14.
   Special Illustration Rare 5, Mega Hyper Rare 1).
 - Exactly 1 Energy-supertype card — so the *inserted* basic energy in a pack
   will not false-match a set card; the count-to-10 stays robust.
+
+### Recognition validated on real footage (2026-06-01)
+
+Tested against a real opening video ("I opened 216 packs of Phantasmal Flames"
+by Full Heal). Findings:
+- **It works on real cards.** A 480p overhead-cam frame of a physical Murkrow
+  held in-hand matched `me2` Murkrow #57 at 51 inliers (next candidate: 9).
+  Snubbull #37 (27) and Darumaka #15 (23) also matched correctly with clear
+  margins.
+- **Isolation is essential.** Whole-frame matching (hands, desk, sealed packs,
+  face-cam all in frame) was noise — 6-15 inliers, wrong card every time. The
+  *same* frames center-cropped produced the correct matches above. This is hard
+  empirical justification for the ROI / card-detection stage.
+- **Confidence threshold:** noise floor ~15 inliers; real hits 25-50+. Starting
+  gate: inliers >= ~25 AND a clear margin over the runner-up. Tune with more /
+  higher-res footage.
+- **Observed real workflow:** overhead cam, cards fanned in-hand (small,
+  overlapping, ~100-150px each at 480p) = the hard end-goal "rip mode". Confirms
+  zone mode (flat, isolated, full-ROI card -> 600+ inliers) is the right first
+  step.
+
+Footage note: yt-dlp can't reach YouTube's media CDN inside the tool sandbox
+(metadata works, media stalls at 0 bytes); it succeeds with the sandbox
+disabled, but repeated pulls trip YouTube's "confirm you're not a bot" challenge
+(needs --cookies-from-browser to continue). For clean accuracy testing, a phone
+photo of a real card dropped into the repo is the fastest gold-standard input.
 
 ## Phase 3 design (decided)
 
