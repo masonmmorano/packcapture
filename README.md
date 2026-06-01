@@ -1,14 +1,38 @@
-# PackCapture
+<p align="center">
+  <img src="assets/pokeball.png" alt="PackCapture" width="96">
+</p>
 
-Open-source desktop tool for Pokémon TCG pack rippers: point a camera at cards
-as you open packs and PackCapture detects, recognizes, and logs each card
-automatically — replacing manual spreadsheet entry. Built for content creators
-and collectors opening high volumes who want pull-rate analytics and clean data
-export.
+<h1 align="center">PackCapture</h1>
+
+<p align="center">
+  <b>Computer-vision card logger for Pokémon TCG pack openings.</b><br>
+  Point a camera at your pulls — PackCapture detects, recognizes, and logs every
+  card automatically, so high-volume rippers get pull-rate analytics and clean
+  data export instead of manual spreadsheet entry.
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue?style=flat-square"></a>
+  <img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white">
+  <img alt="Built with OpenCV" src="https://img.shields.io/badge/CV-OpenCV-5C3EE8?style=flat-square&logo=opencv&logoColor=white">
+  <a href="https://pokemontcg.io"><img alt="Data: Pokémon TCG API" src="https://img.shields.io/badge/data-Pok%C3%A9mon%20TCG%20API-EF5350?style=flat-square"></a>
+  <img alt="Status: early development" src="https://img.shields.io/badge/status-early%20development-orange?style=flat-square">
+</p>
 
 > **Status:** early. Phase 1 (offline set bundles) and Phase 2 (static image
 > recognition) are implemented. Live video, session tracking, export, and UI
 > are next — see [CLAUDE.md](CLAUDE.md) for the full plan and build order.
+
+## Supported sets
+
+<img src="assets/phantasmalflames.png" alt="Phantasmal Flames" align="left" width="160" hspace="12">
+
+**Phantasmal Flames** (`me2`) — the first fully supported set. Its recognition
+bundle ships in the repo, so recognition works out of the box with no API key
+and no build step. More sets will be delivered as downloadable bundles.
+
+<br clear="left">
+
 
 ## How recognition works
 
