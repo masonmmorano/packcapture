@@ -57,13 +57,44 @@
 - **Brand:** README now leads with `packcapture_banner_gh.png`; dropped the
   pack-art PNG; pokeball got its background removed (transparent) and is reused
   as the Highlights bullet icon.
+- **Box smoothing — `BoxSmoother` in `pipeline/roi.py`:** the per-frame auto-ROI
+  jittered (each frame recomputed independently). Added a temporal low-pass
+  (EMA on x/y/w/h + hold-last-box on miss + deadband); dev mode feeds raw
+  detections through it.
+- **Tunable gate floor:** `packcapture dev ... --min-inliers N`. Production floor
+  stays 25; lower it for low-res footage.
+- **Validated the corrected sequence on `diag2.mp4` (480p):** at floor 18 the
+  pipeline logged Snubbull #37 → Murkrow #57 → Darumaka #15 → Bronzor #71 →
+  Sacred Charm #93 — all confirmed by the user's eye, and they land in template
+  slots 1-5 (4 Common + 1 Uncommon), so the per-pack checksum is consistent. Key
+  insight: the recognizer was MORE accurate than the gate allowed — the right
+  cards sat at 21-23 inliers (clear margin over ~6-9 runner-ups). The 480p was
+  just the YouTube *download* resolution, not a real limit; at native res the
+  default floor of 25 should hold.
+- **PR open:** all of today's work is on branch `phase3-pipeline` →
+  https://github.com/masonmmorano/packcapture/pull/1 (25 tests passing).
+
+### Next action when resuming (do this first)
+A ~2-min **1080p-ish screen recording** of the same Full Heal video is waiting at
+`scratch/footage/IMG_6903.MP4` (git-ignored). It's an iPhone capture: **HEVC,
+landscape 2556x1180 after rotation, 60fps** — clean full-frame video, no black
+bars. OpenCV won't reliably read HEVC, so transcode to H.264 first, then run dev
+mode at the **default gate (no --min-inliers)** to confirm the recognizer clears
+25 at real resolution and to get the first multi-pack / checksum-closing run:
+
+```powershell
+ffmpeg -i "scratch/footage/IMG_6903.MP4" -c:v libx264 -crf 18 -preset fast -an "scratch/footage/rip_long.mp4"
+.\.venv\Scripts\python.exe -m packcapture dev scratch\footage\rip_long.mp4 --set me2 --save scratch\footage\rip_dev.mp4
+```
+
+(yt-dlp downloads failed today — bot challenge + Chrome cookie-decryption issues
+on Windows; the screen recording was the workaround.)
 
 ### Next up (in priority order)
 1. **Phase 3 finish:** zone-mode OpenCV confirm-window UI (cv2.selectROI, live
    overlay, hotkeys to confirm/correct) reusing the runner; rip-mode dedupe
    (settle-on-ROI assumes a fixed box, so the moving auto-ROI needs the
-   stable-match approach dev mode prototypes). Tune the gate / settle on better
-   footage (this clip is the hard fanned-stack case; only 2 cards logged cleanly).
+   stable-match approach dev mode prototypes).
 2. **Session DB + pull-rate stats**, then **CSV/JSON export** (Phases 4-5).
 3. **Set-bundling CI** (designed, not built): manual-trigger workflow that builds
    the latest set and publishes the bundle as a GitHub release asset, plus a
