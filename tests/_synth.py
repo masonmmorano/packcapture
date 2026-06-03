@@ -23,10 +23,16 @@ def synth_card(seed: int, h: int = 600, w: int = 430) -> np.ndarray:
 
 
 class FakeClient:
-    """Stands in for PokemonTCGClient; serves synthetic card images."""
+    """Stands in for PokemonTCGClient; serves synthetic card images.
 
-    def __init__(self, n: int = 5):
+    Pass `rarities` (one per card) to control the bundle's rarity column; it
+    defaults to all "Common" for the recognition-only tests.
+    """
+
+    def __init__(self, n: int = 5, rarities: list[str] | None = None):
         self.n = n
+        if rarities is not None:
+            assert len(rarities) == n, "rarities must have one entry per card"
         self._images: dict[str, bytes] = {}
         self._cards = []
         for i in range(n):
@@ -39,7 +45,7 @@ class FakeClient:
                     "id": f"fake-{i}",
                     "number": str(i + 1),
                     "name": f"Card {i + 1}",
-                    "rarity": "Common",
+                    "rarity": rarities[i] if rarities is not None else "Common",
                     "images": {"large": url, "small": url},
                 }
             )
