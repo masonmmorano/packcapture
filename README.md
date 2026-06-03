@@ -1,6 +1,6 @@
-<h1 align="center">
-  <img src="assets/pokeball.png" alt="" height="36">&nbsp; PackCapture
-</h1>
+<p align="center">
+  <img src="assets/packcapture_banner_gh.png" alt="PackCapture" width="100%">
+</p>
 
 <p align="center">
   <b>Computer-vision card logger for Pokémon TCG pack openings.</b><br>
@@ -22,16 +22,18 @@
 > recognition) are implemented. Live video, session tracking, export, and UI
 > are next — see [CLAUDE.md](CLAUDE.md) for the full plan and build order.
 
-## Supported packs
+## Highlights
 
-<img src="assets/phantasmalflames.png" alt="Phantasmal Flames" width="130" align="left" hspace="16" vspace="4">
+<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Offline & set-locked** — recognition searches one set's ~100–400 cards, no network at match time.<br>
+<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Point and rip** — an auto-ROI finds the held cards on a static-camera recording, so there's no zone to set up.<br>
+<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Pack-aware** — variant-by-position plus a per-pack checksum flags any pack that doesn't reconcile, so a missed card is caught, not silently logged.<br>
+<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Dev mode** — `packcapture dev` replays a clip or live feed with the ROI box and a live detection log side by side, for tuning.
+
+## Supported packs
 
 **Phantasmal Flames** (`me2`) — the first fully supported set. Its recognition
 bundle ships in the repo, so recognition works out of the box with no API key
 and no build step. More sets will be delivered as downloadable bundles.
-
-<br clear="left">
-
 
 ## How recognition works
 
@@ -65,6 +67,11 @@ packcapture list-sets
 
 # Recognize a card photo against a built set.
 packcapture match path\to\card.jpg --set sv3pt5 --top 5
+
+# Dev mode: replay a clip (or a live webcam/OBS index) with the auto-ROI box and
+# a live detection log side by side. --save renders it to a video file instead.
+packcapture dev path\to\opening.mp4 --set me2
+packcapture dev 0 --set me2          # live camera (device index 0)
 ```
 
 Set `POKEMONTCG_API_KEY` to raise pokemontcg.io rate limits (optional). Built

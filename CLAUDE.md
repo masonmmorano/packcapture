@@ -31,17 +31,44 @@
 - **Docs/brand:** README with badges, squared pokeball logo, "Supported packs"
   section with pack art; MIT LICENSE.
 
+### Done so far (added 2026-06-03)
+- **Phase 3 build-out (logic core):** `pipeline/confidence.py` (gate: inliers
+  >= 25 AND a margin over the runner-up, noise floor 15), `pipeline/session.py`
+  (variant-by-position + per-pack checksum that flags non-reconciling packs,
+  per-set slot template), `pipeline/runner.py` (headless frames -> settle ->
+  matcher -> gate -> session over any frame iterable). All unit-tested.
+- **Auto-ROI breakthrough — `pipeline/roi.py`:** feature-density alone failed
+  (cluttered background — posters/sealed stacks are feature-rich too — boxed the
+  whole frame = noise). Fix: a fixed-camera rip has a *static* background, so an
+  online MOG2 model drops the clutter; we box the densest connected cluster of
+  ORB keypoints that fall on *moving* foreground, padded T/B. On the real me2
+  clip this auto-recovers a tight box that recognizes Murkrow #57 at ~49 inliers
+  with zero manual setup. This is the "point the camera and rip" enabler.
+- **Dev mode — `devmode.py` + `packcapture dev <src> --set <code>`:** plays a
+  clip or live cam with the auto-ROI box + current match on the left and a
+  scrolling detection log + pack tally on the right; `--save` renders the
+  side-by-side to a file (headless). Stable-match dedupe logs a card once it
+  persists as the accepted top match. Window-based, so not in CI.
+- **Real-footage regression test:** `tests/test_real_footage.py` matches an
+  in-hand crop of me2 Murkrow #57 (local, git-ignored fixture under
+  `tests/assets/`; the crop is a frame from a third-party video, kept out of the
+  public repo for provenance) and asserts the gate accepts it as a Common.
+  Skips when the asset/bundle is absent so CI stays green. 23 tests total.
+- **Brand:** README now leads with `packcapture_banner_gh.png`; dropped the
+  pack-art PNG; pokeball got its background removed (transparent) and is reused
+  as the Highlights bullet icon.
+
 ### Next up (in priority order)
-1. **Phase 3 build-out:** variant-by-position + per-pack checksum session layer;
-   wire FrameSource -> settle -> matcher -> session; an OpenCV confirm-window UI
-   (cv2.selectROI to draw the zone, live overlay, hotkeys to confirm/correct).
-2. **Confidence gate:** use the validated threshold (inliers >= ~25 AND clear
-   margin over runner-up; noise floor ~15).
-3. **Session DB + pull-rate stats**, then **CSV/JSON export** (Phases 4-5).
-4. **Set-bundling CI** (designed, not built): manual-trigger workflow that builds
+1. **Phase 3 finish:** zone-mode OpenCV confirm-window UI (cv2.selectROI, live
+   overlay, hotkeys to confirm/correct) reusing the runner; rip-mode dedupe
+   (settle-on-ROI assumes a fixed box, so the moving auto-ROI needs the
+   stable-match approach dev mode prototypes). Tune the gate / settle on better
+   footage (this clip is the hard fanned-stack case; only 2 cards logged cleanly).
+2. **Session DB + pull-rate stats**, then **CSV/JSON export** (Phases 4-5).
+3. **Set-bundling CI** (designed, not built): manual-trigger workflow that builds
    the latest set and publishes the bundle as a GitHub release asset, plus a
    `packcapture fetch-set <code>` command. User wants "latest set only" first.
-5. **Coverage badge** once pytest-cov is added to CI.
+4. **Coverage badge** once pytest-cov is added to CI.
 
 ### Open items / gotchas
 - More YouTube footage needs `--cookies-from-browser` (bot challenge) and the
