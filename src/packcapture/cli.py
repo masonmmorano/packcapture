@@ -49,7 +49,8 @@ def cmd_dev(args: argparse.Namespace) -> int:
     from .devmode import run
 
     source: object = int(args.source) if str(args.source).isdigit() else args.source
-    return run(source, args.set, save=args.save, stable_frames=args.stable_frames)
+    return run(source, args.set, save=args.save, stable_frames=args.stable_frames,
+               min_inliers=args.min_inliers)
 
 
 def cmd_list_sets(args: argparse.Namespace) -> int:
@@ -98,6 +99,8 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--save", help="Render the side-by-side to this video file instead of a window")
     d.add_argument("--stable-frames", type=int, default=5,
                    help="Frames an accepted card must persist before it's logged")
+    d.add_argument("--min-inliers", type=int, default=25,
+                   help="Confidence-gate inlier floor (lower for low-res footage)")
     d.set_defaults(func=cmd_dev)
 
     s = sub.add_parser("list-sets", help="List locally built bundles")

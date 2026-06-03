@@ -22,7 +22,7 @@ import cv2
 import numpy as np
 
 from .capture.source import FrameSource
-from .pipeline.confidence import ConfidenceGate
+from .pipeline.confidence import ConfidenceGate, GateConfig
 from .pipeline.roi import BoxSmoother, MotionFeatureROI
 from .pipeline.session import Session, rarity_class
 from .recognize.orb_matcher import Matcher
@@ -76,10 +76,11 @@ def run(
     set_code: str,
     save: Optional[str] = None,
     stable_frames: int = 5,
+    min_inliers: int = 25,
     top: int = 5,
 ) -> int:
     matcher = Matcher(load_bundle(set_code))
-    gate = ConfidenceGate()
+    gate = ConfidenceGate(GateConfig(min_inliers=min_inliers))
     roi_detector = MotionFeatureROI()
     smoother = BoxSmoother()
     session = Session(set_code)
