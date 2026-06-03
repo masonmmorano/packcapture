@@ -13,6 +13,7 @@ import cv2
 import pytest
 
 from packcapture.pipeline.confidence import ConfidenceGate
+from packcapture.pipeline.session import RARITY_COMMON, rarity_class
 from packcapture.recognize.orb_matcher import Matcher
 from packcapture.storage.bundle import load_bundle
 
@@ -41,6 +42,11 @@ def test_murkrow_crop_recognized_and_accepted(me2_matcher):
     top = decision.result
     assert top.number == "57", f"expected #57, got #{top.number} ({top.name})"
     assert "Murkrow" in top.name, f"expected Murkrow, got {top.name}"
+    # Visually confirmed a plain (non-reverse) Common in the footage; the bundle
+    # rarity should agree, since the session's variant-by-position checksum keys
+    # off it (a Common here belongs in a slot-1..4 normal position).
+    assert top.rarity == "Common", f"expected Common, got {top.rarity!r}"
+    assert rarity_class(top.rarity) == RARITY_COMMON
     # Real hit should clear the validated floor with a wide margin over the runner-up.
     assert top.inliers >= 25
     if decision.runner_up is not None:
