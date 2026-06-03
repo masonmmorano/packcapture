@@ -68,6 +68,57 @@ def density_bbox(pts: np.ndarray, w: int, h: int, cfg: ROIConfig) -> Optional[RO
     return (x0, y0, x1 - x0, y1 - y0)
 
 
+@dataclass
+class SmootherConfig:
+    # EMA weight on each new box. Lower = smoother but laggier; higher = snappier.
+    alpha: float = 0.35
+    # When detection drops out, keep showing the last box for up to this many frames.
+    max_misses: int = 8
+    # Ignore total box movements below this (px) so a near-stationary box doesn't shimmer.
+    deadband: float = 6.0
+
+
+class BoxSmoother:
+    """Temporal low-pass on an ROI to stop the per-frame box from jittering.
+
+    Combines an EMA on (x, y, w, h), a hold-last-box grace period when a frame
+    yields no ROI, and a deadband that suppresses sub-threshold movement.
+    """
+
+    def __init__(self, config: Optional[SmootherConfig] = None):
+        self.cfg = config or SmootherConfig()
+        self._box: Optional[np.ndarray] = None  # float [x, y, w, h]
+        self._misses = 0
+
+    def reset(self) -> None:
+        self._box = None
+        self._misses = 0
+
+    def update(self, box: Optional[ROI]) -> Optional[ROI]:
+        if box is None:
+            if self._box is None:
+                return None
+            self._misses += 1
+            if self._misses > self.cfg.max_misses:
+                self._box = None
+                return None
+            return self._as_int(self._box)
+
+        self._misses = 0
+        b = np.asarray(box, dtype=float)
+        if self._box is None:
+            self._box = b
+        else:
+            candidate = self.cfg.alpha * b + (1.0 - self.cfg.alpha) * self._box
+            if float(np.abs(candidate - self._box).sum()) >= self.cfg.deadband:
+                self._box = candidate
+        return self._as_int(self._box)
+
+    @staticmethod
+    def _as_int(b: np.ndarray) -> ROI:
+        return (int(round(b[0])), int(round(b[1])), int(round(b[2])), int(round(b[3])))
+
+
 class MotionFeatureROI:
     """Online (per-frame) auto-ROI: moving foreground ∩ ORB feature density."""
 

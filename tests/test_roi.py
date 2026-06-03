@@ -5,7 +5,7 @@ import numpy as np
 
 from _synth import synth_card
 
-from packcapture.pipeline.roi import MotionFeatureROI, ROIConfig
+from packcapture.pipeline.roi import BoxSmoother, MotionFeatureROI, ROIConfig, SmootherConfig
 
 
 def _gradient_bg(h=480, w=640):
@@ -48,3 +48,27 @@ def test_static_scene_emits_no_roi():
     bg = _gradient_bg()
     rois = [det.detect(bg.copy()) for _ in range(12)]
     assert all(r is None for r in rois), "static scene should not produce an ROI"
+
+
+def test_smoother_reduces_jitter():
+    # A box jittering around a fixed center should come out far calmer.
+    rng = np.random.default_rng(0)
+    base = np.array([300, 200, 250, 320], float)
+    sm = BoxSmoother(SmootherConfig(alpha=0.3, deadband=0.0))
+    raw, smoothed = [], []
+    for _ in range(60):
+        b = base + rng.normal(0, 25, 4)
+        raw.append(b[:2].copy())
+        out = sm.update(tuple(b.astype(int)))
+        smoothed.append(np.array(out[:2], float))
+    raw_var = np.var(np.diff(np.array(raw), axis=0))
+    smooth_var = np.var(np.diff(np.array(smoothed), axis=0))
+    assert smooth_var < raw_var / 2, f"smoothing barely helped: {smooth_var} vs {raw_var}"
+
+
+def test_smoother_holds_then_drops_on_misses():
+    sm = BoxSmoother(SmootherConfig(max_misses=3))
+    sm.update((10, 10, 100, 120))
+    held = [sm.update(None) for _ in range(3)]
+    assert all(h is not None for h in held), "should hold the last box during grace"
+    assert sm.update(None) is None, "should drop the box after max_misses"

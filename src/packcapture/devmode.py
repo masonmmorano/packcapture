@@ -23,7 +23,7 @@ import numpy as np
 
 from .capture.source import FrameSource
 from .pipeline.confidence import ConfidenceGate
-from .pipeline.roi import MotionFeatureROI
+from .pipeline.roi import BoxSmoother, MotionFeatureROI
 from .pipeline.session import Session, rarity_class
 from .recognize.orb_matcher import Matcher
 from .storage.bundle import load_bundle
@@ -81,6 +81,7 @@ def run(
     matcher = Matcher(load_bundle(set_code))
     gate = ConfidenceGate()
     roi_detector = MotionFeatureROI()
+    smoother = BoxSmoother()
     session = Session(set_code)
     log: deque = deque(maxlen=16)
 
@@ -95,7 +96,7 @@ def run(
     with FrameSource(source).open() as src:
         for frame in src.frames():
             frame_no += 1
-            roi = roi_detector.detect(frame)
+            roi = smoother.update(roi_detector.detect(frame))
 
             live, live_color = "(no card)", (120, 120, 120)
             if roi is not None:
