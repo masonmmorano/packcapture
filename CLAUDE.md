@@ -74,27 +74,72 @@
 - **PR open:** all of today's work is on branch `phase3-pipeline` →
   https://github.com/masonmmorano/packcapture/pull/1 (25 tests passing).
 
+### Done so far (added 2026-06-05)
+- **Native-resolution validation.** Transcoded the iPhone screen recording
+  `scratch/footage/IMG_6903.MP4` (HEVC → H.264). It's a screen-record of the
+  YouTube "Optimal Ripping" montage *with pillarbox black bars* — `cropdetect`
+  gave `crop=2096:1180:230:0`, baked into the transcode → `rip_long.mp4` (2096x1180,
+  60fps). At native res the recognizer **easily clears the default 25 gate**
+  (inliers 25–106), confirming 480p was only the YouTube *download* limit, not an
+  accuracy floor. But the clip is a fast montage, not a clean factory-order pack,
+  so the count-to-10 checksum correctly can't reconcile it.
+- **Whole-card auto-ROI fix (committed `642f0c6`).** The densest-connected-cluster
+  box only covered a card's textured core → median **13%** of frame height, erratic
+  aspect (0.41–1.98). Replaced with a robust **5–95 percentile bbox of the moving
+  keypoints, grown to card aspect 0.72** (expand the deficient dim, never crop;
+  bias to over-frame since ORB tolerates context but cropping kills it). `roi.py`
+  `density_bbox` → `card_bbox`. Median box height **0.13 → ~0.40** of frame;
+  recognitions **doubled (9 → 18)** on the validation clip; user confirmed the
+  boxes now frame whole cards. (Scratch diagnostics `box_stats.py`/`box_stats2.py`
+  measured this.)
+- **Pack model pivot — see memory `pack-model-gap-segmented`.** Moved away from
+  strict "every pack = 10, checksum to 10" (assumed a disciplined ripper) toward
+  **segmented packs with status labels**, because volume rippers fan past or jump
+  to the hit. One adaptive pipeline, no upfront mode:
+  - State machine: `WAITING_FOR_PACK` (idle / opening next pack) ↔
+    `DETECTING_PACK` (actively recognizing). A boundary closes a pack + ticks the
+    counter.
+  - **Boundary must be VISUAL, not a fixed time gap** — cadence between packs is
+    not constant, so a fixed `gap_frames` is too fragile. Need a visual cue
+    (card-present→absent transition, the tear/open-wrapper motion burst, hands
+    leaving frame, robust "empty frame" state). **Open design problem.**
+  - Status labels: `COMPLETE` (10 seen + checksum reconciles), `SPEED_RIPPED`
+    (<10 but hit / ≥1 card logged — *not* an error), `NO_HIT` (cards seen, no
+    rare+). 0 cards → not counted ("track ≥1 card" rule). The old checksum +
+    variant-by-position code is **retained** — it now earns the `COMPLETE` label.
+  - Common recall deprioritized — optimize for not missing **hits**. Dwell time is
+    a free discriminator (the hit is held ~1s, commons fan by fast), already
+    handled by the stable-match dedupe.
+
 ### Next action when resuming (do this first)
-A ~2-min **1080p-ish screen recording** of the same Full Heal video is waiting at
-`scratch/footage/IMG_6903.MP4` (git-ignored). It's an iPhone capture: **HEVC,
-landscape 2556x1180 after rotation, 60fps** — clean full-frame video, no black
-bars. OpenCV won't reliably read HEVC, so transcode to H.264 first, then run dev
-mode at the **default gate (no --min-inliers)** to confirm the recognizer clears
-25 at real resolution and to get the first multi-pack / checksum-closing run:
+**Blocked on real footage** (see memory `physical-todo-real-pack-footage`). The
+only footage so far is the YouTube montage, which can't validate the pack model /
+checksum (jumbled, not a real single pack). User is recording real `me2` rips in
+three styles: **full top-to-top flip** (→ `COMPLETE` + checksum + variant-by-pos),
+**speed-rip to the hit** (→ `SPEED_RIPPED`), **quick fan / hitless** (→ `NO_HIT`),
+plus eyeballing the inter-pack gap.
+
+Once real footage is dropped in: transcode if HEVC, **check for pillarbox bars**
+(`ffmpeg -i in.mp4 -vf cropdetect -t 20 -f null -`), then build:
+1. The **visual pack-boundary detector** + **anchor-and-hold box machine** (lock a
+   card-sized box on the first confident match, hold it through the pack since the
+   cards don't move once framed, re-anchor on the visual boundary) — same state
+   machine.
+2. Rewrite `pipeline/session.py` from auto-close-at-10 to the segmented model with
+   the status labels above.
 
 ```powershell
-ffmpeg -i "scratch/footage/IMG_6903.MP4" -c:v libx264 -crf 18 -preset fast -an "scratch/footage/rip_long.mp4"
+# transcode (with cropdetect-found crop if pillarboxed), then dev at default gate
+ffmpeg -i "scratch/footage/<in>.mp4" -vf "crop=W:H:X:Y" -c:v libx264 -crf 18 -preset fast -an "scratch/footage/rip_long.mp4"
 .\.venv\Scripts\python.exe -m packcapture dev scratch\footage\rip_long.mp4 --set me2 --save scratch\footage\rip_dev.mp4
 ```
 
-(yt-dlp downloads failed today — bot challenge + Chrome cookie-decryption issues
-on Windows; the screen recording was the workaround.)
-
 ### Next up (in priority order)
-1. **Phase 3 finish:** zone-mode OpenCV confirm-window UI (cv2.selectROI, live
-   overlay, hotkeys to confirm/correct) reusing the runner; rip-mode dedupe
-   (settle-on-ROI assumes a fixed box, so the moving auto-ROI needs the
-   stable-match approach dev mode prototypes).
+1. **Phase 3 finish (rip mode):** visual pack-boundary detector + anchor-and-hold
+   box machine + the gap/visually-segmented `session.py` rewrite (see the
+   2026-06-05 block + memory `pack-model-gap-segmented`). Then the zone-mode
+   OpenCV confirm-window UI (cv2.selectROI, live overlay, hotkeys) reusing the
+   runner for the disciplined `COMPLETE` path.
 2. **Session DB + pull-rate stats**, then **CSV/JSON export** (Phases 4-5).
 3. **Set-bundling CI** (designed, not built): manual-trigger workflow that builds
    the latest set and publishes the bundle as a GitHub release asset, plus a
