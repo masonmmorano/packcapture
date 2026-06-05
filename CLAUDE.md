@@ -5,6 +5,17 @@
 
 ## Session log & how to resume
 
+> **⚠️ START HERE — Claude, before anything else this session, remind the user of
+> their physical (off-keyboard) to-dos.** Progress on the rip-mode pipeline is
+> blocked on them:
+> 1. **Record real `me2` pack rips in three styles** (fixed point-and-rip camera,
+>    native res): full top-to-top flip, speed-rip straight to the hit, and quick
+>    fan / hitless. Drop the files in `scratch/footage/`.
+> 2. **Eyeball the inter-pack gap** in `scratch/footage/rip_long.mp4` (how long the
+>    frame is empty between packs vs. pauses within a pack).
+>
+> Surface this first, then continue. (Also in memory: `physical-todo-real-pack-footage`.)
+
 **Repo:** https://github.com/masonmmorano/packcapture (public). Local:
 `C:\Users\Mason\Documents\repositories\packcapture`.
 
