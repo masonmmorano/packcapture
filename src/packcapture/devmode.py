@@ -60,7 +60,7 @@ def _to_h264(path: str) -> None:
         subprocess.run(
             ["ffmpeg", "-y", "-i", path, "-c:v", "libx264", "-crf", "20",
              "-preset", "fast", "-pix_fmt", "yuv420p", tmp],
-            check=True, capture_output=True,
+            check=True, capture_output=True, text=True,
         )
         os.replace(tmp, path)
     except subprocess.CalledProcessError as e:
