@@ -47,8 +47,9 @@ def _panel(session: Session, log: deque, live: str, live_color, frame_no: int) -
     _put(p, live, (70, 92), 0.55, live_color, 2)
 
     st = session.stats()
-    _put(p, f"packs {st['packs']}  (ok {st['packs_reconciled']} / flagged {st['packs_flagged']})"
-            f"   pending {session.pending}/{session.pack_size}",
+    bs = st["by_status"]
+    _put(p, f"packs {st['packs']}  (C{bs['complete']}/S{bs['speed_ripped']}/N{bs['no_hit']}"
+            f" flag {st['packs_flagged']})   pending {session.pending}/{session.pack_size}",
          (16, 122), 0.5, (200, 200, 120))
     cv2.line(p, (16, 138), (PANEL_W - 16, 138), (70, 70, 70), 1)
 
@@ -113,7 +114,7 @@ def run(
                         cur_id = r.card_id
                         if cur_n == stable_frames and r.card_id != last_logged:
                             last_logged = r.card_id
-                            card, pack = session.add(
+                            card = session.add(
                                 card_id=r.card_id, name=r.name, number=r.number,
                                 base_rarity=r.rarity, inliers=r.inliers,
                             )
@@ -122,10 +123,6 @@ def run(
                                 f"  slot{card.slot} {card.variant[:3]}  i{card.inliers}",
                                 (90, 220, 90),
                             ))
-                            if pack is not None:
-                                ok = "OK" if pack.reconciled else "FLAGGED"
-                                col = (90, 220, 90) if pack.reconciled else (90, 90, 230)
-                                log.appendleft((f"---- Pack {pack.index}: {ok} ----", col))
                     else:
                         live = f"{r.name} #{r.number}  i{r.inliers}  reject"
                         live_color = (90, 160, 230)
@@ -153,10 +150,14 @@ def run(
     if show:
         cv2.destroyAllWindows()
 
+    # No boundary detector wired in yet, so the whole run closes as one segment.
     pack = session.finalize()
-    if pack is not None and not pack.reconciled:
-        print(f"final partial pack flagged: {pack.issues}")
+    if pack is not None:
+        print(f"final pack {pack.index}: {pack.status}"
+              + (f" issues: {pack.issues}" if pack.issues else ""))
     st = session.stats()
+    bs = st["by_status"]
     print(f"dev run done: {frame_no} frames, {st['cards_logged']} cards logged, "
-          f"{st['packs']} pack(s).")
+          f"{st['packs']} pack(s) "
+          f"(complete {bs['complete']} / speed {bs['speed_ripped']} / no-hit {bs['no_hit']}).")
     return 0

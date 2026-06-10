@@ -14,7 +14,7 @@ from _synth import FakeClient, synth_card
 
 from packcapture.pipeline.confidence import ConfidenceGate, GateConfig
 from packcapture.pipeline.runner import run_stream
-from packcapture.pipeline.session import Session
+from packcapture.pipeline.session import STATUS_COMPLETE, Session
 from packcapture.pipeline.settle import SettleConfig, SettleDetector
 from packcapture.recognize.orb_matcher import Matcher
 from packcapture.setbuild.builder import build_set
@@ -71,7 +71,9 @@ def test_one_clean_pack_logged_and_reconciled(pack_bundle):
     assert len(logged) == 10, [e.decision.reason for e in events]
     assert len(excluded) == 1  # the blank frame
 
-    assert len(session.packs) == 1
-    pack = session.packs[0]
-    assert pack.reconciled, pack.issues
+    # The stream never closes packs itself — that's the boundary's job.
+    assert session.packs == [] and session.pending == 10
+    pack = session.close_pack()
+    assert pack.status == STATUS_COMPLETE, pack.issues
+    assert pack.reconciled
     assert [c.card_id for c in pack.cards] == [f"fake-{i}" for i in range(10)]
