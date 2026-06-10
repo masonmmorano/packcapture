@@ -1,6 +1,7 @@
 # assets/
 
-Static images used by docs/README (logos, pack art, screenshots).
+Static images used by docs/README.
 
-Drop the Phantasmal Flames pack art here, e.g. `phantasmal-flames.png`, and it
-gets wired into the top of the root README as a banner/badge.
+- `packcapture_banner_gh.png` — the banner at the top of the root README.
+- `pokeball.png` — transparent-background pokeball, used as the bullet icon in
+  the README Highlights list.

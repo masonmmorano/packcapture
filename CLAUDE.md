@@ -5,6 +5,17 @@
 
 ## Session log & how to resume
 
+> **⚠️ START HERE — Claude, before anything else this session, remind the user of
+> their physical (off-keyboard) to-dos.** Progress on the rip-mode pipeline is
+> blocked on them:
+> 1. **Record real `me2` pack rips in three styles** (fixed point-and-rip camera,
+>    native res): full top-to-top flip, speed-rip straight to the hit, and quick
+>    fan / hitless. Drop the files in `scratch/footage/`.
+> 2. **Eyeball the inter-pack gap** in `scratch/footage/rip_long.mp4` (how long the
+>    frame is empty between packs vs. pauses within a pack).
+>
+> Surface this first, then continue. (Also in memory: `physical-todo-real-pack-footage`.)
+
 **Repo:** https://github.com/masonmmorano/packcapture (public). Local:
 `C:\Users\Mason\Documents\repositories\packcapture`.
 
@@ -31,17 +42,120 @@
 - **Docs/brand:** README with badges, squared pokeball logo, "Supported packs"
   section with pack art; MIT LICENSE.
 
+### Done so far (added 2026-06-03)
+- **Phase 3 build-out (logic core):** `pipeline/confidence.py` (gate: inliers
+  >= 25 AND a margin over the runner-up, noise floor 15), `pipeline/session.py`
+  (variant-by-position + per-pack checksum that flags non-reconciling packs,
+  per-set slot template), `pipeline/runner.py` (headless frames -> settle ->
+  matcher -> gate -> session over any frame iterable). All unit-tested.
+- **Auto-ROI breakthrough — `pipeline/roi.py`:** feature-density alone failed
+  (cluttered background — posters/sealed stacks are feature-rich too — boxed the
+  whole frame = noise). Fix: a fixed-camera rip has a *static* background, so an
+  online MOG2 model drops the clutter; we box the densest connected cluster of
+  ORB keypoints that fall on *moving* foreground, padded T/B. On the real me2
+  clip this auto-recovers a tight box that recognizes Murkrow #57 at ~49 inliers
+  with zero manual setup. This is the "point the camera and rip" enabler.
+- **Dev mode — `devmode.py` + `packcapture dev <src> --set <code>`:** plays a
+  clip or live cam with the auto-ROI box + current match on the left and a
+  scrolling detection log + pack tally on the right; `--save` renders the
+  side-by-side to a file (headless). Stable-match dedupe logs a card once it
+  persists as the accepted top match. Window-based, so not in CI.
+- **Real-footage regression test:** `tests/test_real_footage.py` matches an
+  in-hand crop of me2 Murkrow #57 (local, git-ignored fixture under
+  `tests/assets/`; the crop is a frame from a third-party video, kept out of the
+  public repo for provenance) and asserts the gate accepts it as a Common.
+  Skips when the asset/bundle is absent so CI stays green. 23 tests total.
+- **Brand:** README now leads with `packcapture_banner_gh.png`; dropped the
+  pack-art PNG; pokeball got its background removed (transparent) and is reused
+  as the Highlights bullet icon.
+- **Box smoothing — `BoxSmoother` in `pipeline/roi.py`:** the per-frame auto-ROI
+  jittered (each frame recomputed independently). Added a temporal low-pass
+  (EMA on x/y/w/h + hold-last-box on miss + deadband); dev mode feeds raw
+  detections through it.
+- **Tunable gate floor:** `packcapture dev ... --min-inliers N`. Production floor
+  stays 25; lower it for low-res footage.
+- **Validated the corrected sequence on `diag2.mp4` (480p):** at floor 18 the
+  pipeline logged Snubbull #37 → Murkrow #57 → Darumaka #15 → Bronzor #71 →
+  Sacred Charm #93 — all confirmed by the user's eye, and they land in template
+  slots 1-5 (4 Common + 1 Uncommon), so the per-pack checksum is consistent. Key
+  insight: the recognizer was MORE accurate than the gate allowed — the right
+  cards sat at 21-23 inliers (clear margin over ~6-9 runner-ups). The 480p was
+  just the YouTube *download* resolution, not a real limit; at native res the
+  default floor of 25 should hold.
+- **PR open:** all of today's work is on branch `phase3-pipeline` →
+  https://github.com/masonmmorano/packcapture/pull/1 (25 tests passing).
+
+### Done so far (added 2026-06-05)
+- **Native-resolution validation.** Transcoded the iPhone screen recording
+  `scratch/footage/IMG_6903.MP4` (HEVC → H.264). It's a screen-record of the
+  YouTube "Optimal Ripping" montage *with pillarbox black bars* — `cropdetect`
+  gave `crop=2096:1180:230:0`, baked into the transcode → `rip_long.mp4` (2096x1180,
+  60fps). At native res the recognizer **easily clears the default 25 gate**
+  (inliers 25–106), confirming 480p was only the YouTube *download* limit, not an
+  accuracy floor. But the clip is a fast montage, not a clean factory-order pack,
+  so the count-to-10 checksum correctly can't reconcile it.
+- **Whole-card auto-ROI fix (committed `642f0c6`).** The densest-connected-cluster
+  box only covered a card's textured core → median **13%** of frame height, erratic
+  aspect (0.41–1.98). Replaced with a robust **5–95 percentile bbox of the moving
+  keypoints, grown to card aspect 0.72** (expand the deficient dim, never crop;
+  bias to over-frame since ORB tolerates context but cropping kills it). `roi.py`
+  `density_bbox` → `card_bbox`. Median box height **0.13 → ~0.40** of frame;
+  recognitions **doubled (9 → 18)** on the validation clip; user confirmed the
+  boxes now frame whole cards. (Scratch diagnostics `box_stats.py`/`box_stats2.py`
+  measured this.)
+- **Pack model pivot — see memory `pack-model-gap-segmented`.** Moved away from
+  strict "every pack = 10, checksum to 10" (assumed a disciplined ripper) toward
+  **segmented packs with status labels**, because volume rippers fan past or jump
+  to the hit. One adaptive pipeline, no upfront mode:
+  - State machine: `WAITING_FOR_PACK` (idle / opening next pack) ↔
+    `DETECTING_PACK` (actively recognizing). A boundary closes a pack + ticks the
+    counter.
+  - **Boundary must be VISUAL, not a fixed time gap** — cadence between packs is
+    not constant, so a fixed `gap_frames` is too fragile. Need a visual cue
+    (card-present→absent transition, the tear/open-wrapper motion burst, hands
+    leaving frame, robust "empty frame" state). **Open design problem.**
+  - Status labels: `COMPLETE` (10 seen + checksum reconciles), `SPEED_RIPPED`
+    (<10 but hit / ≥1 card logged — *not* an error), `NO_HIT` (cards seen, no
+    rare+). 0 cards → not counted ("track ≥1 card" rule). The old checksum +
+    variant-by-position code is **retained** — it now earns the `COMPLETE` label.
+  - Common recall deprioritized — optimize for not missing **hits**. Dwell time is
+    a free discriminator (the hit is held ~1s, commons fan by fast), already
+    handled by the stable-match dedupe.
+
+### Next action when resuming (do this first)
+**Blocked on real footage** (see memory `physical-todo-real-pack-footage`). The
+only footage so far is the YouTube montage, which can't validate the pack model /
+checksum (jumbled, not a real single pack). User is recording real `me2` rips in
+three styles: **full top-to-top flip** (→ `COMPLETE` + checksum + variant-by-pos),
+**speed-rip to the hit** (→ `SPEED_RIPPED`), **quick fan / hitless** (→ `NO_HIT`),
+plus eyeballing the inter-pack gap.
+
+Once real footage is dropped in: transcode if HEVC, **check for pillarbox bars**
+(`ffmpeg -i in.mp4 -vf cropdetect -t 20 -f null -`), then build:
+1. The **visual pack-boundary detector** + **anchor-and-hold box machine** (lock a
+   card-sized box on the first confident match, hold it through the pack since the
+   cards don't move once framed, re-anchor on the visual boundary) — same state
+   machine.
+2. Rewrite `pipeline/session.py` from auto-close-at-10 to the segmented model with
+   the status labels above.
+
+```powershell
+# transcode (with cropdetect-found crop if pillarboxed), then dev at default gate
+ffmpeg -i "scratch/footage/<in>.mp4" -vf "crop=W:H:X:Y" -c:v libx264 -crf 18 -preset fast -an "scratch/footage/rip_long.mp4"
+.\.venv\Scripts\python.exe -m packcapture dev scratch\footage\rip_long.mp4 --set me2 --save scratch\footage\rip_dev.mp4
+```
+
 ### Next up (in priority order)
-1. **Phase 3 build-out:** variant-by-position + per-pack checksum session layer;
-   wire FrameSource -> settle -> matcher -> session; an OpenCV confirm-window UI
-   (cv2.selectROI to draw the zone, live overlay, hotkeys to confirm/correct).
-2. **Confidence gate:** use the validated threshold (inliers >= ~25 AND clear
-   margin over runner-up; noise floor ~15).
-3. **Session DB + pull-rate stats**, then **CSV/JSON export** (Phases 4-5).
-4. **Set-bundling CI** (designed, not built): manual-trigger workflow that builds
+1. **Phase 3 finish (rip mode):** visual pack-boundary detector + anchor-and-hold
+   box machine + the gap/visually-segmented `session.py` rewrite (see the
+   2026-06-05 block + memory `pack-model-gap-segmented`). Then the zone-mode
+   OpenCV confirm-window UI (cv2.selectROI, live overlay, hotkeys) reusing the
+   runner for the disciplined `COMPLETE` path.
+2. **Session DB + pull-rate stats**, then **CSV/JSON export** (Phases 4-5).
+3. **Set-bundling CI** (designed, not built): manual-trigger workflow that builds
    the latest set and publishes the bundle as a GitHub release asset, plus a
    `packcapture fetch-set <code>` command. User wants "latest set only" first.
-5. **Coverage badge** once pytest-cov is added to CI.
+4. **Coverage badge** once pytest-cov is added to CI.
 
 ### Open items / gotchas
 - More YouTube footage needs `--cookies-from-browser` (bot challenge) and the

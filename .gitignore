@@ -23,6 +23,13 @@ sets/
 scratch/
 samples/
 
+# Local-only real-footage test fixtures (third-party video frames; kept out of
+# the public repo for provenance/IP reasons). The README that documents how to
+# regenerate them IS tracked; the images are not.
+tests/assets/*.png
+tests/assets/*.jpg
+tests/assets/*.jpeg
+
 # OS / editor
 .DS_Store
 Thumbs.db
