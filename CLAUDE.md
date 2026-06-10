@@ -152,6 +152,26 @@
 - **Dev mode shows the boundary state** (user request): `DETECTING`/`WAITING`
   tag on the video + state and motion level on the panel; packs close live on
   PACK_END with their status label in the log. 34 tests green.
+- **End-to-end render confirmed by the user** on the 0:40–1:35 window
+  (`rip_window_dev_h264.mp4`): "captures the important cards he shows," states
+  flip correctly, and **the pack count came out right** (4 segments, all
+  `SPEED_RIPPED` — correct for montage footage; jumpcuts account for the extra
+  segments, per the user's heads-up). 8 cards logged incl. Mega Lopunny i128.
+- **`--save` renders now auto re-encode to H.264** (`devmode._to_h264`):
+  OpenCV can only write mp4v on Windows, which stock players won't open; the
+  finished render is handed to ffmpeg in place (graceful note if ffmpeg absent).
+- **Footage cleanup (~700 MB freed):** deleted IMG_6903.MP4 (source iPhone
+  recording — rip_long.mp4 is the keeper transcode), old dev renders, extracted
+  frame dirs, stale diagnostics. Kept: `rip_long.mp4` (ground-truth clip),
+  `rip_window_dev_h264.mp4` (validated render), `diag2.mp4`, the two state PNGs.
+  The probe window can be re-cut anytime: `ffmpeg -ss 40 -to 95 -i rip_long.mp4
+  -c copy rip_window.mp4`.
+- **Threshold question answered for the user:** slow ripping (30s+ gaps) is
+  inherently fine (the cut is visual absence, not gap length). Known failure
+  modes, both visible: packs merge if the frame is never card-free ~1s between
+  packs (>10 cards flags it; merged speed-rips undercount silently — the one
+  sneaky case), and a >2.5s mid-pack walk-away splits a pack. Tripod footage
+  tunes the two constants (2.5s absence, 1s+burst 0.25).
 
 ### Next action when resuming (do this first)
 **Final validation still needs real tripod footage** (user has no tripod yet —
@@ -189,9 +209,11 @@ into `runner.py` (it's only in devmode so far), and Phase 4 below.
 - More YouTube footage needs `--cookies-from-browser` (bot challenge) and the
   tool sandbox disabled (CDN blocked); a phone photo of a real card dropped into
   the repo is the fastest clean test input.
-- Local-only scratch (git-ignored): `scratch/footage/` has `diag2.mp4` (working
-  10s clip) + extracted `frames/`; helper scripts `scratch/extract_frames.py`,
-  `match_frames.py`, `match_crop.py`.
+- Local-only scratch (git-ignored): `scratch/footage/` has `rip_long.mp4`
+  (ground-truth montage clip), `rip_window_dev_h264.mp4` (validated dev render),
+  `diag2.mp4` (working 10s clip); helper scripts `scratch/extract_frames.py`,
+  `match_frames.py`, `match_crop.py`, `boundary_probe.py` (boundary validation
+  vs. user-eyeballed timestamps).
 
 ## What it is
 
