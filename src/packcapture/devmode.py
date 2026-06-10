@@ -15,6 +15,10 @@ viewer favors showing the live tracking.)
 """
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import tempfile
 from collections import deque
 from typing import Optional, Union
 
@@ -37,6 +41,31 @@ FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 def _put(img, text, org, scale=0.5, color=(230, 230, 230), thick=1):
     cv2.putText(img, text, org, FONT, scale, color, thick, cv2.LINE_AA)
+
+
+def _to_h264(path: str) -> None:
+    """Re-encode a finished --save render to H.264 in place.
+
+    OpenCV's VideoWriter can only produce mp4v (MPEG-4 Part 2) reliably on
+    Windows, which the stock players won't open. ffmpeg is a project
+    dependency, so hand the file to it; if it's missing, leave the mp4v file
+    and say so.
+    """
+    if shutil.which("ffmpeg") is None:
+        print(f"note: ffmpeg not found — {path} is mp4v and may not play in stock players")
+        return
+    fd, tmp = tempfile.mkstemp(suffix=".mp4", dir=os.path.dirname(os.path.abspath(path)))
+    os.close(fd)
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", path, "-c:v", "libx264", "-crf", "20",
+             "-preset", "fast", "-pix_fmt", "yuv420p", tmp],
+            check=True, capture_output=True,
+        )
+        os.replace(tmp, path)
+    except subprocess.CalledProcessError as e:
+        os.unlink(tmp)
+        print(f"note: H.264 re-encode failed ({e.stderr[-200:]}); {path} left as mp4v")
 
 
 def _panel(session: Session, log: deque, live: str, live_color, frame_no: int,
@@ -184,6 +213,7 @@ def run(
 
     if writer is not None:
         writer.release()
+        _to_h264(save)
     if show:
         cv2.destroyAllWindows()
 
