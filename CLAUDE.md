@@ -6,13 +6,14 @@
 ## Session log & how to resume
 
 > **⚠️ START HERE — Claude, before anything else this session, remind the user of
-> their physical (off-keyboard) to-dos.** Progress on the rip-mode pipeline is
-> blocked on them:
+> their physical (off-keyboard) to-do.** Final validation of the rip-mode
+> pipeline is blocked on it:
 > 1. **Record real `me2` pack rips in three styles** (fixed point-and-rip camera,
 >    native res): full top-to-top flip, speed-rip straight to the hit, and quick
->    fan / hitless. Drop the files in `scratch/footage/`.
-> 2. **Eyeball the inter-pack gap** in `scratch/footage/rip_long.mp4` (how long the
->    frame is empty between packs vs. pauses within a pack).
+>    fan / hitless. Drop the files in `scratch/footage/`. **Blocker noted
+>    2026-06-10: user has no tripod yet.**
+> 2. ~~Eyeball the inter-pack gap in `rip_long.mp4`~~ — **DONE 2026-06-10**
+>    (gap ≈ 4–6s; see the 2026-06-10 block below).
 >
 > Surface this first, then continue. (Also in memory: `physical-todo-real-pack-footage`.)
 
@@ -122,35 +123,62 @@
     a free discriminator (the hit is held ~1s, commons fan by fast), already
     handled by the stable-match dedupe.
 
+### Done so far (added 2026-06-10)
+- **PR #1 merged to main.** New branch `phase3-segmented` for this work.
+- **Inter-pack gap measured (user eyeballed `rip_long.mp4`):** grab 0:55 → tear
+  1:00 → fan ~1:00–1:12 → set down + grab next → tear ~1:18. **Cards-absent gap
+  between packs ≈ 4–6s**; within-pack pauses well under 2s. The ~3–5s
+  wrapper-in-hand phase before each tear is a distinct visual state.
+- **Segmented `session.py` rewrite (committed `80b21d1`):** packs close only on
+  an explicit boundary (`close_pack()`/`finalize()`), never by counting to 10.
+  Status labels: `COMPLETE` (exactly 10 + checksum reconciles), `SPEED_RIPPED`
+  (rare+ logged, not an error), `NO_HIT`. Empty segments aren't counted;
+  variants downgrade to `unknown` unless the pack closed as a full factory-order
+  flip; >10-card segments flag a likely missed boundary. Checksum +
+  variant-by-position retained as the `COMPLETE` earner.
+- **Visual pack-boundary detector (committed `7508ba1`):**
+  `pipeline/boundary.py` — WAITING_FOR_PACK ↔ DETECTING_PACK from two per-frame
+  signals: card-presence evidence (matcher top candidate ≥ noise floor ~15
+  inliers, softer than the logging gate) and MOG2 foreground fraction
+  (`MotionFeatureROI.last_motion`). Cut = card-present→absent with 2.5s
+  hysteresis + motion-burst accelerator (absent ≥1s AND motion ≥0.25). Entry
+  debounced (3 evidence frames in a 12-frame window).
+- **Validated against ground truth on `rip_long.mp4`** (scratch/boundary_probe.py):
+  detector found PACK_END 0:55.3 (user: grabs pack 0:55), PACK_START 1:02.8
+  (tear 1:00 + card becomes recognizable), PACK_END 1:12.8 (done ~1:12–1:14),
+  PACK_START 1:18.5 (tear ~1:18). **All four boundaries within ~2s of the
+  user's eyeballed timeline**, on hostile montage footage with jumpcuts.
+  Evidence trace: 27–30/30 frames during packs, hard 0 in gaps.
+- **Dev mode shows the boundary state** (user request): `DETECTING`/`WAITING`
+  tag on the video + state and motion level on the panel; packs close live on
+  PACK_END with their status label in the log. 34 tests green.
+
 ### Next action when resuming (do this first)
-**Blocked on real footage** (see memory `physical-todo-real-pack-footage`). The
-only footage so far is the YouTube montage, which can't validate the pack model /
-checksum (jumbled, not a real single pack). User is recording real `me2` rips in
-three styles: **full top-to-top flip** (→ `COMPLETE` + checksum + variant-by-pos),
-**speed-rip to the hit** (→ `SPEED_RIPPED`), **quick fan / hitless** (→ `NO_HIT`),
-plus eyeballing the inter-pack gap.
+**Final validation still needs real tripod footage** (user has no tripod yet —
+see the START HERE block). The boundary detector + segmented session are built
+and probe-validated; what real footage adds: per-style label correctness
+(`COMPLETE`/`SPEED_RIPPED`/`NO_HIT`), hysteresis/burst threshold tuning on real
+cadence, and the checksum on a true factory-order pack.
 
 Once real footage is dropped in: transcode if HEVC, **check for pillarbox bars**
-(`ffmpeg -i in.mp4 -vf cropdetect -t 20 -f null -`), then build:
-1. The **visual pack-boundary detector** + **anchor-and-hold box machine** (lock a
-   card-sized box on the first confident match, hold it through the pack since the
-   cards don't move once framed, re-anchor on the visual boundary) — same state
-   machine.
-2. Rewrite `pipeline/session.py` from auto-close-at-10 to the segmented model with
-   the status labels above.
+(`ffmpeg -i in.mp4 -vf cropdetect -t 20 -f null -`), then:
 
 ```powershell
 # transcode (with cropdetect-found crop if pillarboxed), then dev at default gate
-ffmpeg -i "scratch/footage/<in>.mp4" -vf "crop=W:H:X:Y" -c:v libx264 -crf 18 -preset fast -an "scratch/footage/rip_long.mp4"
-.\.venv\Scripts\python.exe -m packcapture dev scratch\footage\rip_long.mp4 --set me2 --save scratch\footage\rip_dev.mp4
+ffmpeg -i "scratch/footage/<in>.mp4" -vf "crop=W:H:X:Y" -c:v libx264 -crf 18 -preset fast -an "scratch/footage/<out>.mp4"
+.\.venv\Scripts\python.exe -m packcapture dev scratch\footage\<out>.mp4 --set me2 --save scratch\footage\<out>_dev.mp4
 ```
 
+Meanwhile buildable without footage: the **anchor-and-hold box machine** (lock a
+card-sized box on the first confident match, hold through the pack, re-anchor on
+PACK_END — rides the same BoundaryDetector states), wiring the BoundaryDetector
+into `runner.py` (it's only in devmode so far), and Phase 4 below.
+
 ### Next up (in priority order)
-1. **Phase 3 finish (rip mode):** visual pack-boundary detector + anchor-and-hold
-   box machine + the gap/visually-segmented `session.py` rewrite (see the
-   2026-06-05 block + memory `pack-model-gap-segmented`). Then the zone-mode
-   OpenCV confirm-window UI (cv2.selectROI, live overlay, hotkeys) reusing the
-   runner for the disciplined `COMPLETE` path.
+1. **Phase 3 finish (rip mode):** anchor-and-hold box machine + BoundaryDetector
+   in `runner.py`; tune thresholds on real footage when it lands. Then the
+   zone-mode OpenCV confirm-window UI (cv2.selectROI, live overlay, hotkeys)
+   reusing the runner for the disciplined `COMPLETE` path.
 2. **Session DB + pull-rate stats**, then **CSV/JSON export** (Phases 4-5).
 3. **Set-bundling CI** (designed, not built): manual-trigger workflow that builds
    the latest set and publishes the bundle as a GitHub release asset, plus a
