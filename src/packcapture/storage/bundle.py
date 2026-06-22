@@ -52,9 +52,13 @@ def _load_rows(db_path: Path) -> list[dict[str, Any]]:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
+        # Price columns are added by `fetch-prices` after the fact; older bundles
+        # may not have them, so select them only when present.
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(cards)")}
+        base = ["idx", "card_id", "number", "name", "rarity", "set_code", "image_url"]
+        extra = [c for c in ("price", "price_variant", "price_updated") if c in cols]
         cur = conn.execute(
-            "SELECT idx, card_id, number, name, rarity, set_code, image_url "
-            "FROM cards ORDER BY idx"
+            f"SELECT {', '.join(base + extra)} FROM cards ORDER BY idx"
         )
         return [dict(r) for r in cur.fetchall()]
     finally:

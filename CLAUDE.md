@@ -173,6 +173,49 @@
   sneaky case), and a >2.5s mid-pack walk-away splits a pack. Tripod footage
   tunes the two constants (2.5s absence, 1s+burst 0.25).
 
+### Done so far (added 2026-06-22)
+- **Competitor reframe — price overlay ("rip mode" front end).** User flagged a
+  monetized competitor, *hypeoverlay*: fan each card full-in-frame, it pops the
+  raw price as you scan. We replicate it AND keep our analytics edge. Screenshot
+  saved at `scratch/hypeoverlay.png` (their layout: facecam top-left, price block
+  below it). Our test footage has the **facecam top-right**, so our block sits
+  top-right under the facecam.
+- **Price layer (`setbuild/prices.py` + `packcapture fetch-prices <code>`).**
+  Decoupled from the heavy ORB rebuild: prices change daily, so `fetch-prices`
+  pulls TCGPlayer prices (JSON only, no media — works where the CDN is blocked)
+  and writes `price`/`price_variant`/`price_updated` columns onto the existing
+  bundle's `metadata.db` (ALTER-if-missing; loader selects them only when
+  present, so old bundles still load). "Raw price" = market, preferring the
+  non-foil printing (`normal → holofoil → reverseHolofoil`), field
+  `market → mid → low`. **me2 priced: 130/130.** The committed me2 bundle now
+  ships with prices baked in (zero-setup).
+- **Overlay render (`overlay.py` + `packcapture overlay <src> --set --save
+  --export`).** Same recognition core as dev mode (ROI → matcher → gate →
+  BoundaryDetector → Session), but draws on the clean footage itself, in **two
+  separated pieces** (user's call):
+  - **Price ticker** (top-right, under facecam): current card + raw price only,
+    with a **slide-up + fade-in** per card (`TICKER_ANIM_S=0.40s`, ease-out
+    cubic). Rare+ gets a gold **HIT** tag + gold price. The "dumb price read."
+  - **Pack analytics** (fixed, bottom-right): session value, pack/card counts,
+    COMPLETE/SPEED/NOHIT breakdown, last pack label. Our edge over the competitor.
+  - `--export <json>` writes per-card/per-pack analytics (price, rarity, variant,
+    inliers, pack status/value, session totals). `--save` re-encodes to H.264.
+- **Shared `mediautil.to_h264`** — pulled the H.264 re-encode out of devmode so
+  overlay and devmode share it (devmode behavior unchanged).
+- **Validated on `rip_window.mp4`** (re-cut 0:40–1:35 of rip_long): 8 cards, 4
+  packs (all SPEED_RIPPED — correct for jumpcut montage), session raw value
+  **$23.62**; Mega Lopunny ex hit at 121 inliers → $19.10. Render +
+  `scratch/footage/rip_window_overlay.{mp4,json}`. User confirmed visuals
+  (ticker slide-up + gold hit tag + fixed analytics panel) on extracted frames.
+- **ORB same-name disambiguation confirmed:** me2 has Ambipom #79 (Rare) and
+  #107 (Illustration Rare); the recognizer correctly matched the IR by art and
+  priced it foil ($2.40). Validation win, not a bug.
+- **Tests:** `tests/test_overlay.py` (price-selection preference order, export
+  report totals/pack values, missing-price handling, draw smoke). **40 green.**
+- **Still pending (unchanged):** real tripod footage; variant-specific pricing
+  (currently one representative price/card — switch to per-slot reverse-holo
+  pricing once packs close as COMPLETE on real footage).
+
 ### Next action when resuming (do this first)
 **Final validation still needs real tripod footage** (user has no tripod yet —
 see the START HERE block). The boundary detector + segmented session are built
@@ -389,15 +432,22 @@ Store `supertype` in the bundle (helps classify energy), and add `variant`/
 
 ```
 src/packcapture/
-  cli.py                 argparse entry point (build-set / match / list-sets)
+  cli.py                 argparse entry point (build-set / match / list-sets /
+                         fetch-prices / dev / overlay)
   config.py              paths, API endpoints, ORB params
+  mediautil.py           to_h264(): re-encode a render in place (shared)
+  devmode.py             dev viewer: video + auto-ROI + scrolling log, side by side
+  overlay.py             rip-mode render: animated price ticker + fixed pack-analytics panel
   api/pokemontcg.py      pokemontcg.io v2 client (paginated, retrying)
   setbuild/builder.py    build-set: fetch + precompute + save
+  setbuild/prices.py     fetch-prices: raw TCGPlayer prices -> bundle metadata.db columns
   recognize/
     features.py          ORB extraction + keypoint (de)serialization
     orb_matcher.py       set-locked matcher (ratio test + RANSAC)
-  storage/bundle.py      load/save the on-disk bundle
-tests/test_pipeline.py   synthetic build+match test (no network)
+  pipeline/              settle / confidence / roi / boundary / session / runner
+  capture/source.py      FrameSource: webcam / OBS / video file
+  storage/bundle.py      load/save the on-disk bundle (price columns optional)
+tests/                   pytest suite (40 tests; test_overlay.py covers price+export)
 ```
 
 ## Dev setup (Windows)
