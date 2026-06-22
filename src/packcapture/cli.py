@@ -53,6 +53,29 @@ def cmd_dev(args: argparse.Namespace) -> int:
                min_inliers=args.min_inliers)
 
 
+def cmd_fetch_prices(args: argparse.Namespace) -> int:
+    from .setbuild.prices import update_bundle_prices
+
+    summary = update_bundle_prices(args.code)
+    print(f"Updated prices for '{args.code}':")
+    print(f"  cards:   {summary['cards']}")
+    print(f"  priced:  {summary['priced']}")
+    if summary["missing"]:
+        print(f"  missing: {summary['missing']} card(s) had no usable price")
+    return 0
+
+
+def cmd_overlay(args: argparse.Namespace) -> int:
+    from .overlay import run
+
+    source: object = int(args.source) if str(args.source).isdigit() else args.source
+    return run(
+        source, args.set, save=args.save, export=args.export,
+        stable_frames=args.stable_frames, min_inliers=args.min_inliers,
+        facecam_frac=args.facecam_frac,
+    )
+
+
 def cmd_list_sets(args: argparse.Namespace) -> int:
     from .config import data_dir
 
@@ -102,6 +125,23 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--min-inliers", type=int, default=25,
                    help="Confidence-gate inlier floor (lower for low-res footage)")
     d.set_defaults(func=cmd_dev)
+
+    fp = sub.add_parser("fetch-prices", help="Refresh raw (TCGPlayer) prices on a built bundle")
+    fp.add_argument("code", help="Set code of a built bundle, e.g. me2")
+    fp.set_defaults(func=cmd_fetch_prices)
+
+    o = sub.add_parser("overlay", help="Rip-mode price overlay on clean footage (ticker + total)")
+    o.add_argument("source", help="Webcam/OBS device index (e.g. 0) or a video file path")
+    o.add_argument("--set", required=True, help="Set code of a built bundle")
+    o.add_argument("--save", help="Render to this video file instead of showing a window")
+    o.add_argument("--export", help="Write a per-card/per-pack analytics JSON to this path")
+    o.add_argument("--stable-frames", type=int, default=5,
+                   help="Frames an accepted card must persist before it's logged")
+    o.add_argument("--min-inliers", type=int, default=25,
+                   help="Confidence-gate inlier floor (lower for low-res footage)")
+    o.add_argument("--facecam-frac", type=float, default=0.30,
+                   help="Facecam height as a fraction of frame height; the price block sits below it")
+    o.set_defaults(func=cmd_overlay)
 
     s = sub.add_parser("list-sets", help="List locally built bundles")
     s.set_defaults(func=cmd_list_sets)

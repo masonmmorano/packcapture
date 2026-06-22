@@ -7,8 +7,13 @@ detector, and on each settle event recognizes the ROI, applies the confidence
 gate, and logs accepted cards to the session.
 
 Rejected or no-match recognitions are surfaced as "excluded" events (energy,
-code card, or low-confidence) but never logged, so the count-to-10 checksum in
-the session stays honest.
+code card, or low-confidence) but never logged, so the session's pack labeling
+stays honest.
+
+Pack boundaries are NOT decided here: the session segments packs only when
+``close_pack()`` is called (by the visual boundary detector, a manual close, or
+``finalize()`` at session end). ``run_stream`` may be called on successive
+chunks of one session; it never closes packs itself.
 """
 from __future__ import annotations
 
@@ -19,7 +24,7 @@ import numpy as np
 
 from ..recognize.orb_matcher import Matcher
 from .confidence import ConfidenceGate, GateDecision
-from .session import LoggedCard, Pack, Session
+from .session import LoggedCard, Session
 from .settle import SettleDetector
 
 # ROI as (x, y, w, h), matching cv2.selectROI's output.
@@ -31,7 +36,6 @@ class PipelineEvent:
     kind: str                       # "logged" or "excluded"
     decision: GateDecision
     card: Optional[LoggedCard] = None   # set when kind == "logged"
-    pack: Optional[Pack] = None         # set when this card closed a pack
 
 
 def crop(frame: np.ndarray, roi: Optional[ROI]) -> np.ndarray:
@@ -68,13 +72,13 @@ def run_stream(
             events.append(PipelineEvent("excluded", decision))
             continue
         r = decision.result
-        card, pack = session.add(
+        card = session.add(
             card_id=r.card_id,
             name=r.name,
             number=r.number,
             base_rarity=r.rarity,
             inliers=r.inliers,
         )
-        events.append(PipelineEvent("logged", decision, card=card, pack=pack))
+        events.append(PipelineEvent("logged", decision, card=card))
 
     return events

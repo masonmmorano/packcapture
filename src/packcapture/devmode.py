@@ -22,6 +22,8 @@ import cv2
 import numpy as np
 
 from .capture.source import FrameSource
+from .mediautil import to_h264
+from .pipeline.boundary import DETECTING_PACK, PACK_END, PACK_START, BoundaryConfig, BoundaryDetector
 from .pipeline.confidence import ConfidenceGate, GateConfig
 from .pipeline.roi import BoxSmoother, MotionFeatureROI
 from .pipeline.session import Session, rarity_class
@@ -38,17 +40,25 @@ def _put(img, text, org, scale=0.5, color=(230, 230, 230), thick=1):
     cv2.putText(img, text, org, FONT, scale, color, thick, cv2.LINE_AA)
 
 
-def _panel(session: Session, log: deque, live: str, live_color, frame_no: int) -> np.ndarray:
+def _panel(session: Session, log: deque, live: str, live_color, frame_no: int,
+           state: str, motion: float) -> np.ndarray:
     p = np.full((VIEW_H, PANEL_W, 3), BG, np.uint8)
     _put(p, "PackCapture - DEV MODE", (16, 32), 0.7, (255, 255, 255), 2)
     _put(p, f"set {session.set_code}   frame {frame_no}", (16, 58), 0.5, (160, 160, 160))
+
+    # Pack-boundary state machine: DETECTING_PACK (cards in play) vs WAITING_FOR_PACK.
+    detecting = state == DETECTING_PACK
+    st_color = (90, 220, 90) if detecting else (160, 160, 160)
+    _put(p, ("DETECTING PACK" if detecting else "WAITING FOR PACK") + f"   motion {motion:.2f}",
+         (220, 58), 0.5, st_color, 2 if detecting else 1)
 
     _put(p, "LIVE:", (16, 92), 0.55, (160, 160, 160))
     _put(p, live, (70, 92), 0.55, live_color, 2)
 
     st = session.stats()
-    _put(p, f"packs {st['packs']}  (ok {st['packs_reconciled']} / flagged {st['packs_flagged']})"
-            f"   pending {session.pending}/{session.pack_size}",
+    bs = st["by_status"]
+    _put(p, f"packs {st['packs']}  (C{bs['complete']}/S{bs['speed_ripped']}/N{bs['no_hit']}"
+            f" flag {st['packs_flagged']})   pending {session.pending}/{session.pack_size}",
          (16, 122), 0.5, (200, 200, 120))
     cv2.line(p, (16, 138), (PANEL_W - 16, 138), (70, 70, 70), 1)
 
@@ -60,14 +70,19 @@ def _panel(session: Session, log: deque, live: str, live_color, frame_no: int) -
 
 
 def _compose(frame: np.ndarray, roi, live: str, live_color,
-             session: Session, log: deque, frame_no: int) -> np.ndarray:
+             session: Session, log: deque, frame_no: int,
+             state: str, motion: float) -> np.ndarray:
     h, w = frame.shape[:2]
     scale = VIEW_H / h
     left = cv2.resize(frame, (int(w * scale), VIEW_H))
     if roi is not None:
         x, y, rw, rh = (int(v * scale) for v in roi)
         cv2.rectangle(left, (x, y), (x + rw, y + rh), live_color, 2)
-    panel = _panel(session, log, live, live_color, frame_no)
+    # State tag on the video itself so it reads even in a cropped screenshot.
+    tag_color = (90, 220, 90) if state == DETECTING_PACK else (140, 140, 140)
+    _put(left, "DETECTING" if state == DETECTING_PACK else "WAITING",
+         (12, 28), 0.65, tag_color, 2)
+    panel = _panel(session, log, live, live_color, frame_no, state, motion)
     return np.hstack([left, panel])
 
 
@@ -78,6 +93,7 @@ def run(
     stable_frames: int = 5,
     min_inliers: int = 25,
     top: int = 5,
+    evidence_inliers: int = 15,
 ) -> int:
     matcher = Matcher(load_bundle(set_code))
     gate = ConfidenceGate(GateConfig(min_inliers=min_inliers))
@@ -93,19 +109,28 @@ def run(
     writer = None
     show = save is None
     frame_no = 0
+    boundary: Optional[BoundaryDetector] = None
 
     with FrameSource(source).open() as src:
         for frame in src.frames():
+            if boundary is None:
+                boundary = BoundaryDetector(BoundaryConfig(fps=src.fps or 30.0))
             frame_no += 1
             roi = smoother.update(roi_detector.detect(frame))
+            motion = roi_detector.last_motion
 
             live, live_color = "(no card)", (120, 120, 120)
+            card_seen = False
             if roi is not None:
                 x, y, w, h = roi
                 res = matcher.match_array(frame[y:y + h, x:x + w], top=top)
                 decision = gate.evaluate(res)
                 if res:
                     r = res[0]
+                    # Presence evidence for the boundary machine: softer than the
+                    # logging gate, so fast-fanned cards still count as "a card
+                    # is in play" even when not confidently identified.
+                    card_seen = r.inliers >= evidence_inliers
                     if decision.accepted:
                         live = f"{r.name} #{r.number}  i{r.inliers}  ACCEPT"
                         live_color = (90, 220, 90)
@@ -113,7 +138,7 @@ def run(
                         cur_id = r.card_id
                         if cur_n == stable_frames and r.card_id != last_logged:
                             last_logged = r.card_id
-                            card, pack = session.add(
+                            card = session.add(
                                 card_id=r.card_id, name=r.name, number=r.number,
                                 base_rarity=r.rarity, inliers=r.inliers,
                             )
@@ -122,10 +147,6 @@ def run(
                                 f"  slot{card.slot} {card.variant[:3]}  i{card.inliers}",
                                 (90, 220, 90),
                             ))
-                            if pack is not None:
-                                ok = "OK" if pack.reconciled else "FLAGGED"
-                                col = (90, 220, 90) if pack.reconciled else (90, 90, 230)
-                                log.appendleft((f"---- Pack {pack.index}: {ok} ----", col))
                     else:
                         live = f"{r.name} #{r.number}  i{r.inliers}  reject"
                         live_color = (90, 160, 230)
@@ -133,7 +154,21 @@ def run(
             else:
                 cur_id, cur_n = None, 0
 
-            canvas = _compose(frame, roi, live, live_color, session, log, frame_no)
+            ev = boundary.update(card_seen, motion)
+            if ev == PACK_START:
+                log.appendleft((">> pack started", (200, 200, 120)))
+            elif ev == PACK_END:
+                pack = session.close_pack()
+                last_logged = None  # next pack may open on the same card art
+                if pack is not None:
+                    col = (90, 220, 90) if pack.status == "complete" else (200, 200, 120)
+                    log.appendleft((
+                        f"---- Pack {pack.index}: {pack.status.upper()}"
+                        f" ({len(pack.cards)} cards) ----", col,
+                    ))
+
+            canvas = _compose(frame, roi, live, live_color, session, log, frame_no,
+                              boundary.state, motion)
 
             if show:
                 cv2.imshow("packcapture dev", canvas)
@@ -150,13 +185,18 @@ def run(
 
     if writer is not None:
         writer.release()
+        to_h264(save)
     if show:
         cv2.destroyAllWindows()
 
+    # No boundary detector wired in yet, so the whole run closes as one segment.
     pack = session.finalize()
-    if pack is not None and not pack.reconciled:
-        print(f"final partial pack flagged: {pack.issues}")
+    if pack is not None:
+        print(f"final pack {pack.index}: {pack.status}"
+              + (f" issues: {pack.issues}" if pack.issues else ""))
     st = session.stats()
+    bs = st["by_status"]
     print(f"dev run done: {frame_no} frames, {st['cards_logged']} cards logged, "
-          f"{st['packs']} pack(s).")
+          f"{st['packs']} pack(s) "
+          f"(complete {bs['complete']} / speed {bs['speed_ripped']} / no-hit {bs['no_hit']}).")
     return 0

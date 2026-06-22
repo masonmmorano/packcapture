@@ -18,22 +18,26 @@
   <img alt="Status: early development" src="https://img.shields.io/badge/status-early%20development-orange?style=flat-square">
 </p>
 
-> **Status:** early. Phase 1 (offline set bundles) and Phase 2 (static image
-> recognition) are implemented. Live video, session tracking, export, and UI
+> **Status:** active development. Phase 1 (offline set bundles), Phase 2 (static
+> image recognition), and much of Phase 3 (live video pipeline) are implemented —
+> auto-ROI, segmented pack sessions, visual pack-boundary detection, a rip-mode
+> price overlay, and analytics export. Persistent session DB and a polished UI
 > are next — see [CLAUDE.md](CLAUDE.md) for the full plan and build order.
 
 ## Highlights
 
 <img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Offline & set-locked** — recognition searches one set's ~100–400 cards, no network at match time.<br>
 <img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Point and rip** — an auto-ROI finds the held cards on a static-camera recording, so there's no zone to set up.<br>
-<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Pack-aware** — variant-by-position plus a per-pack checksum flags any pack that doesn't reconcile, so a missed card is caught, not silently logged.<br>
+<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Live price overlay** — `packcapture overlay` draws a raw-price ticker for each card you fan (like the stream overlays) **plus** a pack-analytics panel, and exports per-card / per-pack data as JSON.<br>
+<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Pack-aware** — packs are segmented by a visual boundary detector and labelled (`COMPLETE` / `SPEED_RIPPED` / `NO_HIT`); a per-pack checksum flags any full pack that doesn't reconcile, so a missed card is caught, not silently logged.<br>
 <img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Dev mode** — `packcapture dev` replays a clip or live feed with the ROI box and a live detection log side by side, for tuning.
 
 ## Supported packs
 
 **Phantasmal Flames** (`me2`) — the first fully supported set. Its recognition
-bundle ships in the repo, so recognition works out of the box with no API key
-and no build step. More sets will be delivered as downloadable bundles.
+bundle ships in the repo (with raw prices baked in), so recognition and the
+price overlay work out of the box with no API key and no build step. More sets
+will be delivered as downloadable bundles.
 
 ## How recognition works
 
@@ -68,6 +72,15 @@ packcapture list-sets
 # Recognize a card photo against a built set.
 packcapture match path\to\card.jpg --set sv3pt5 --top 5
 
+# Refresh raw (TCGPlayer) prices for a built set. Prices change daily and are
+# stored on the bundle, separate from the one-time recognition build.
+packcapture fetch-prices me2
+
+# Rip mode: a price ticker + pack-analytics overlay on a clip (or live webcam/OBS
+# index). --save renders to a video file; --export writes a per-card/per-pack JSON.
+packcapture overlay path\to\opening.mp4 --set me2 --save out.mp4 --export out.json
+packcapture overlay 0 --set me2      # live camera (device index 0)
+
 # Dev mode: replay a clip (or a live webcam/OBS index) with the auto-ROI box and
 # a live detection log side by side. --save renders it to a video file instead.
 packcapture dev path\to\opening.mp4 --set me2
@@ -82,7 +95,7 @@ release assets so most users never hit the API.
 
 ```
 sets/<code>/
-  metadata.db      SQLite: card id, number, name, rarity, set_code (idx aligns to .npy rows)
+  metadata.db      SQLite: card id, number, name, rarity, set_code, raw price (idx aligns to .npy rows)
   embeddings.npy   per-card ORB descriptors
   keypoints.npy    per-card ORB keypoints (for RANSAC verification)
   thumbnails/      small reference JPEGs (confirmation UI only)
@@ -93,7 +106,7 @@ sets/<code>/
 
 ```powershell
 pip install -e ".[dev]"
-pytest          # runs a network-free synthetic end-to-end test
+pytest          # network-free suite (synthetic build/match, pipeline, overlay, sessions)
 ```
 
 ## License

@@ -135,6 +135,9 @@ class MotionFeatureROI:
             detectShadows=False,
         )
         self._seen = 0
+        # Fraction of the last frame that was moving foreground (0..1). Read by
+        # the pack-boundary detector as its motion-burst signal.
+        self.last_motion: float = 0.0
 
     def detect(self, frame_bgr: np.ndarray) -> Optional[ROI]:
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY) if frame_bgr.ndim == 3 else frame_bgr
@@ -142,10 +145,11 @@ class MotionFeatureROI:
 
         fg = self.bg.apply(frame_bgr)
         self._seen += 1
+        fg = (fg > 0).astype(np.uint8)
+        self.last_motion = float(fg.mean())
         if self._seen <= self.cfg.warmup:
             return None
 
-        fg = (fg > 0).astype(np.uint8)
         fg = cv2.morphologyEx(fg, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
         fg = cv2.morphologyEx(fg, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8))
 
