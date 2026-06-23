@@ -572,30 +572,39 @@ cards recognized + priced, slide animation visible.
   text). Not fixable in-window; **Phase 2's HTML/CSS overlay is the real fix** —
   and it's viewer-facing, which is where font quality matters.
 
-### Phase 2 — in-stream browser overlay (NEXT — what's still needed)
-The viewer-facing overlay (like the competitor) AND the real-font fix. Build
-checklist:
-- [ ] **`overlay_server.py`** — a tiny **stdlib** HTTP server (no new deps;
-  prefer **Server-Sent Events** over WebSocket for one-way state push) serving:
-  (a) a transparent HTML/CSS/JS overlay page, (b) an SSE endpoint streaming the
-  current `OverlayState` as JSON. `publish(state)` updates a latest-state slot.
-- [ ] **`packcapture serve <src> --set me2`** — runs the engine headless
-  (ThreadedFrameSource + RecognitionWorker, same core as `--threaded`) and pushes
-  `engine.snapshot()` to the server on each update; prints the OBS URL.
-- [ ] **The overlay page** — ticker + analytics panels in HTML/CSS mirroring the
-  cv2 layout (dark panels, red-orange gradient stripe, per-tier rarity colors,
-  gold HIT), **slide-up/fade as a CSS transition** triggered on a new card
-  (e.g. `count` change), real web font. Transparent `body` so OBS keys it out.
-- [ ] **`OverlayState → JSON`** helper (formatted price strings, a new-card seq).
-  `OverlayState` becomes the single source of truth for **two renderers** (cv2
-  window + web view).
-- [ ] **OBS docs** — add a **Browser Source** → `http://localhost:PORT/overlay`,
-  sized to the canvas, transparent. **No feedback loop:** recognize from the
-  clean **Virtual Cam scene = cam only**; the Browser Source lives only in the
-  **Record/Stream scene = cam + browser**, so recognition never sees its own
-  overlay. Document the exact scene routing.
-- [ ] **Tests** — JSON serialization/formatting; server serves the page; publish
-  updates the latest-state slot (keep SSE-stream tests non-flaky).
+### Phase 2 — in-stream browser overlay (BUILT 2026-06-23, branch `phase3-browser-overlay`)
+The viewer-facing overlay (like the competitor) AND the real-font fix. This is
+also the **substrate for the eventual web GUI** (a control-panel page on the same
+server) — so "web overlay → web GUI" is the planned UI direction, not OpenCV
+windows forever. Status:
+- [x] **`overlay_server.py`** — stdlib HTTP server (no new deps) + **Server-Sent
+  Events** for one-way state push. Serves the overlay page at `/overlay` and the
+  state stream at `/events`. `OverlayServer.publish(state)` dedupes (only bumps
+  the SSE seq on real change). `state_to_payload` serializes `OverlayState`
+  (formatted prices, BGR→hex rarity color, `count` as the new-card trigger).
+- [x] **`packcapture serve <src> --set me2`** — runs the engine headless (same
+  threaded core as `--threaded`) and publishes `engine.snapshot()` at ~20 Hz;
+  prints the OBS URL + scene-routing note.
+- [x] **The overlay page** (inline HTML/CSS/JS in `overlay_server.py`) — ticker +
+  analytics panels mirroring the cv2 layout (dark glass, red→orange stripe,
+  tier-colored rarity, gold HIT), **CSS slide-up** restarted on a new card, real
+  web font. Transparent `body` for OBS.
+- [x] **Frame pacing for file replay** — `ThreadedFrameSource(pace=...)`: a live
+  camera stays real-time/drop-stale, but a **file** is paced to its own fps so the
+  threaded recognizer replays it like a live feed (a file would otherwise race
+  through and the worker would sample ~nothing). Lets us preview/validate the
+  overlay against `IMG_7032.MOV` with no camera.
+- [x] **Tests** (`tests/test_overlay_server.py`, +pacing in test_threaded) — 59 green.
+- **Validated:** `serve IMG_7032.MOV --set me2` → **29 cards / 3 packs**
+  (~matches the serial render's 30/3). Note: the threaded path samples ~3 recog/sec
+  vs serial's 30+, so fast montage clips (diag2) under-recognize — fine for live
+  (cards held; design optimizes for not missing *hits*), but it means the
+  in-stream overlay is intentionally less exhaustive than the offline `--save`.
+- [ ] **OBS validation (needs the user):** add a **Browser Source** →
+  `http://localhost:8770/overlay`, sized to the canvas, transparent. **No feedback
+  loop:** recognize from the clean **Virtual Cam scene = cam only**; the Browser
+  Source lives only in the **Record/Stream scene = cam + browser**. Document the
+  exact scene routing once confirmed live.
 
 ### Still needed beyond Phase 2 (running list)
 - **Live recognition tuning:** validate COMPLETE/SPEED_RIPPED/NO_HIT *live* on a
@@ -623,7 +632,9 @@ checklist:
 ```
 src/packcapture/
   cli.py                 argparse entry point (build-set / match / list-sets /
-                         list-cameras / fetch-prices / fetch-meta / dev / overlay)
+                         list-cameras / fetch-prices / fetch-meta / dev / overlay / serve)
+  overlay_server.py      serve: headless recognition + transparent HTML/CSS overlay
+                         over SSE for an OBS Browser Source (the in-stream overlay)
   config.py              paths, API endpoints, ORB params
   mediautil.py           to_h264(): re-encode a render in place (shared)
   devmode.py             dev viewer: video + auto-ROI + scrolling log, side by side
@@ -637,11 +648,11 @@ src/packcapture/
     orb_matcher.py       set-locked matcher (ratio test + RANSAC)
   pipeline/              settle / confidence / roi / boundary / session / runner
   capture/source.py      FrameSource: webcam / OBS / video file
-  capture/threaded.py    ThreadedFrameSource + RecognitionWorker (real-time core)
+  capture/threaded.py    ThreadedFrameSource (+ file pacing) + RecognitionWorker (real-time core)
   capture/devices.py     enumerate_cameras(): probe indices for `list-cameras`
   storage/bundle.py      load/save the on-disk bundle (price + supertype columns optional)
-tests/                   pytest suite (52 tests; test_threaded.py + test_overlay.py
-                         OverlayEngine cover the live core)
+tests/                   pytest suite (59 tests; test_threaded / test_overlay
+                         (OverlayEngine) / test_overlay_server cover the live + web core)
 ```
 
 ## Dev setup (Windows)

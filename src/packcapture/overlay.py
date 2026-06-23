@@ -483,6 +483,36 @@ class OverlayEngine:
             return replace(self.st)
 
 
+def build_engine(
+    set_code: str,
+    *,
+    boundary_fps: float,
+    min_inliers: int = 25,
+    stable_frames: int = 5,
+    evidence_inliers: int = 15,
+    top: int = 5,
+):
+    """Load a bundle and wire up an :class:`OverlayEngine`.
+
+    Returns ``(engine, price_map, set_name)``; the engine owns the session
+    (``engine.session``) and overlay state (``engine.st``). Shared by the live
+    window and the browser-overlay server so they stay in lockstep.
+    """
+    bundle = load_bundle(set_code)
+    matcher = Matcher(bundle)
+    gate = ConfidenceGate(GateConfig(min_inliers=min_inliers))
+    price_map = {r["card_id"]: (r.get("price"), r.get("price_variant") or "") for r in bundle.rows}
+    if not any(p is not None for p, _ in price_map.values()):
+        print(f"warning: bundle '{set_code}' has no prices — run `packcapture fetch-prices {set_code}` first.")
+    set_name = bundle.manifest.get("set_name") or set_code.upper()
+    engine = OverlayEngine(
+        matcher, gate, Session(set_code), price_map, OverlayState(set_name=set_name),
+        boundary_fps=boundary_fps, top=top, stable_frames=stable_frames,
+        evidence_inliers=evidence_inliers,
+    )
+    return engine, price_map, set_name
+
+
 def run(
     source: Union[int, str],
     set_code: str,
@@ -615,26 +645,18 @@ def run_live_threaded(
     though one recognition takes ~300 ms. ``max_seconds`` bounds the run for
     tests/headless use.
     """
-    bundle = load_bundle(set_code)
-    matcher = Matcher(bundle)
-    gate = ConfidenceGate(GateConfig(min_inliers=min_inliers))
-    session = Session(set_code)
-
-    price_map = {r["card_id"]: (r.get("price"), r.get("price_variant") or "") for r in bundle.rows}
-    if not any(p is not None for p, _ in price_map.values()):
-        print(f"warning: bundle '{set_code}' has no prices — run `packcapture fetch-prices {set_code}` first.")
-    set_name = bundle.manifest.get("set_name") or set_code.upper()
-    st = OverlayState(set_name=set_name)
-
     # Boundary cadence is the recognition rate, not the camera rate, because the
     # engine ticks the detector once per recognition (not once per frame).
-    engine = OverlayEngine(
-        matcher, gate, session, price_map, st, boundary_fps=recog_fps,
-        top=top, stable_frames=stable_frames, evidence_inliers=evidence_inliers,
+    engine, price_map, set_name = build_engine(
+        set_code, boundary_fps=recog_fps, min_inliers=min_inliers,
+        stable_frames=stable_frames, evidence_inliers=evidence_inliers, top=top,
     )
+    session, st = engine.session, engine.st
 
     fsrc = FrameSource(source)
-    tfs = ThreadedFrameSource(fsrc).start()
+    # Live camera: real-time, drop stale frames. File: pace to its fps so the
+    # threaded recognizer replays it like a live feed rather than racing through.
+    tfs = ThreadedFrameSource(fsrc, pace=None if fsrc.is_device else "source").start()
     fps = fsrc.fps or 30.0
     # Wall-clock tick shared by recognition (last_log_frame) and drawing
     # (frame_idx) so the ticker slide reads a steady ~0.4 s regardless of either
