@@ -176,7 +176,7 @@ def test_engine_logs_cards_from_recognition(pack_bundle):
         img = synth_card(i + 1)
         for _ in range(eng.stable_frames):  # hold each card long enough to log
             clock += 1
-            eng.process(img, clock)
+            eng.process(img, lambda: clock)
     assert eng.st.count == 10
     assert round(eng.st.total, 2) == round(sum(0.10 * (i + 1) for i in range(10)), 2)
     pack = eng.session.close_pack()
@@ -188,8 +188,8 @@ def test_engine_clock_drives_last_log_frame(pack_bundle):
     # slide animation reads correctly whatever drives the clock.
     eng = _engine(pack_bundle)
     img = synth_card(1)
-    eng.process(img, 100)     # cur_n = 1
-    eng.process(img, 12345)   # cur_n = 2 == stable_frames -> logs on this tick
+    eng.process(img, lambda: 100)     # cur_n = 1
+    eng.process(img, lambda: 12345)   # cur_n = 2 == stable_frames -> logs, clock sampled now
     assert eng.st.count == 1
     assert eng.st.last_log_frame == 12345
 

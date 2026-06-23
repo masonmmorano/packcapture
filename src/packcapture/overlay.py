@@ -416,8 +416,14 @@ class OverlayEngine:
         self._last_logged: Optional[str] = None
         self._lock = threading.Lock()
 
-    def process(self, frame: np.ndarray, clock: int) -> None:
-        """Recognize one frame and fold the result into the overlay state."""
+    def process(self, frame: np.ndarray, clock: Callable[[], int]) -> None:
+        """Recognize one frame and fold the result into the overlay state.
+
+        ``clock`` is sampled *at the moment a card is logged* (not at call time),
+        so in the threaded path the ~300 ms recognition latency doesn't eat the
+        ticker's slide window — ``last_log_frame`` reflects when the card became
+        visible, and the display's next draw sees the slide from its start.
+        """
         st = self.st
         roi = self.smoother.update(self.roi_detector.detect(frame))
         motion = self.roi_detector.last_motion
@@ -452,7 +458,7 @@ class OverlayEngine:
                             st.variant = _variant_label(card.variant)
                             st.is_hit = (rarity_class(r.rarity) == RARITY_RARE_PLUS
                                          and price is not None and price > HIT_PRICE)
-                            st.last_log_frame = clock
+                            st.last_log_frame = clock()
                             st.count += 1
                             if price is not None:
                                 st.total += price
@@ -525,9 +531,10 @@ def run(
         )
         for frame in src.frames():
             frame_no += 1
-            # Serial path: the frame counter is the clock, so last_log_frame and
-            # the draw frame_idx share units (offline behavior unchanged).
-            engine.process(frame, frame_no)
+            # Serial path: the frame counter is the clock. The card is drawn on
+            # the same frame it's logged, so last_log_frame == frame_idx and the
+            # slide starts from zero (offline behavior unchanged).
+            engine.process(frame, lambda: frame_no)
 
             if show:
                 drag.ensure(frame.shape[1], frame.shape[0])
@@ -633,8 +640,10 @@ def run_live_threaded(
     # (frame_idx) so the ticker slide reads a steady ~0.4 s regardless of either
     # thread's rate.
     clock = lambda: int(time.monotonic() * fps)
+    # Pass the clock itself (not clock()) so last_log_frame is stamped when the
+    # card is logged, after recognition — keeping the slide window intact.
     worker = RecognitionWorker(
-        tfs.latest, process=lambda f: engine.process(f, clock()), on_result=lambda r: None,
+        tfs.latest, process=lambda f: engine.process(f, clock), on_result=lambda r: None,
     ).start()
 
     ticker_origin, analytics_origin = (None, None) if reset_layout else load_layout(set_code)
