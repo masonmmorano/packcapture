@@ -18,17 +18,20 @@
   <img alt="Status: early development" src="https://img.shields.io/badge/status-early%20development-orange?style=flat-square">
 </p>
 
-> **Status:** active development. Phase 1 (offline set bundles), Phase 2 (static
-> image recognition), and much of Phase 3 (live video pipeline) are implemented —
-> auto-ROI, segmented pack sessions, visual pack-boundary detection, a rip-mode
-> price overlay, and analytics export. Persistent session DB and a polished UI
-> are next — see [CLAUDE.md](CLAUDE.md) for the full plan and build order.
+> **Status:** active development. Implemented: offline set bundles, static-image
+> recognition, and a full **live** pipeline — auto-ROI, segmented pack sessions,
+> visual pack-boundary detection, a threaded real-time recognizer, a rip-mode
+> price overlay (cv2 window **and** an in-stream web overlay for OBS), and an
+> **operator control panel** with CSV/JSON export. A persistent session DB and a
+> polished report UI are next — see [CLAUDE.md](CLAUDE.md) for the full plan.
 
 ## Highlights
 
 <img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Offline & set-locked** — recognition searches one set's ~100–400 cards, no network at match time.<br>
-<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Point and rip** — an auto-ROI finds the held cards on a static-camera recording, so there's no zone to set up.<br>
-<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Live price overlay** — `packcapture overlay` draws a raw-price ticker for each card you fan (like the stream overlays) **plus** a pack-analytics panel, and exports per-card / per-pack data as JSON.<br>
+<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Point and rip** — an auto-ROI finds the held cards on a static-camera feed, so there's no zone to set up.<br>
+<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Live, in real time** — a threaded recognizer runs on a live camera (any webcam, OBS Virtual Cam, or a phone-as-webcam) while the video stays smooth. `packcapture overlay 0 --set me2 --threaded`.<br>
+<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **In-stream overlay for OBS** — `packcapture serve` exposes the price ticker + pack-analytics as a transparent web page to drop into OBS as a Browser Source, so viewers see prices as you scan each card.<br>
+<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Operator control panel** — `packcapture gui` is a browser cockpit (separate from the viewer overlay): pick a set + camera, start/stop, watch the live card log, and **export the session to CSV/JSON** (drops straight into Google Sheets).<br>
 <img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Pack-aware** — packs are segmented by a visual boundary detector and labelled (`COMPLETE` / `SPEED_RIPPED` / `NO_HIT`); a per-pack checksum flags any full pack that doesn't reconcile, so a missed card is caught, not silently logged.<br>
 <img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Dev mode** — `packcapture dev` replays a clip or live feed with the ROI box and a live detection log side by side, for tuning.
 
@@ -76,16 +79,47 @@ packcapture match path\to\card.jpg --set sv3pt5 --top 5
 # stored on the bundle, separate from the one-time recognition build.
 packcapture fetch-prices me2
 
+# Backfill static card metadata (supertype) onto an existing bundle without a
+# full ORB rebuild (used to exclude inserted basic energy from pack counts).
+packcapture fetch-meta me2
+
 # Rip mode: a price ticker + pack-analytics overlay on a clip (or live webcam/OBS
 # index). --save renders to a video file; --export writes a per-card/per-pack JSON.
 packcapture overlay path\to\opening.mp4 --set me2 --save out.mp4 --export out.json
-packcapture overlay 0 --set me2      # live camera (device index 0)
+packcapture overlay 0 --set me2 --threaded   # live camera, smooth (threaded recognizer)
+
+# Find a camera's device index (webcam, OBS Virtual Cam, phone-as-webcam).
+packcapture list-cameras
 
 # Dev mode: replay a clip (or a live webcam/OBS index) with the auto-ROI box and
 # a live detection log side by side. --save renders it to a video file instead.
 packcapture dev path\to\opening.mp4 --set me2
 packcapture dev 0 --set me2          # live camera (device index 0)
 ```
+
+### Live capture: in-stream overlay + control panel
+
+For streaming and high-volume sessions, PackCapture serves two web surfaces from
+one local server (no extra dependencies):
+
+```powershell
+# Operator control panel: pick a set + source, start/stop, watch the live card
+# log, export the session. Open the printed http://localhost:8770/control.
+packcapture gui
+
+# Headless: just serve the clean overlay for OBS, auto-started on one source.
+packcapture serve 0 --set me2
+```
+
+- **`/overlay`** — a transparent ticker + pack-analytics page. In OBS, add it as a
+  **Browser Source** (`http://localhost:8770/overlay`); the transparent background
+  composites it over your camera so viewers see live prices.
+- **`/control`** — the operator cockpit (separate from the overlay viewers see):
+  set + camera pickers, Start/Stop, a live card log with hits highlighted, running
+  totals, and **Export CSV / JSON** (the CSV imports straight into Google Sheets).
+
+No camera yet? You can preview both pages by pointing the source at a video file
+(it replays at real time), e.g. `packcapture serve path\to\opening.mp4 --set me2`.
 
 Set `POKEMONTCG_API_KEY` to raise pokemontcg.io rate limits (optional). Built
 bundles live under `sets/<code>/` and are git-ignored — they'll ship as GitHub

@@ -13,12 +13,12 @@
 > from the raw `.MOV`, never the burned-in `_fixed` file; see gotchas). This drove
 > the energy-exclusion fix (see the 2026-06-23 block below).
 >
-> Remaining physical to-do (off-keyboard):
-> 1. **Live-capture validation (newly unblocked).** The live threaded overlay is
->    built (`overlay … --threaded`) but unproven on a real feed. Pre-tripod, use a
->    **phone as a webcam** (Iriun/DroidCam/Camo → phone shows up as a device; or
->    into OBS → Virtual Cam), `packcapture list-cameras` for the index, then run it.
->    Needs a fixed phone mount (static background for the boundary detector).
+> Live operator overlay is now **validated live** (2026-06-23): iPhone → Iriun
+> Webcam @ 1080p → `overlay 0 --set me2 --threaded`, smooth with the slide
+> animation. **Now building Phase 2** (in-stream browser overlay). Remaining
+> physical to-do (off-keyboard):
+> 1. **Fixed phone mount** — a static background for the boundary detector (a
+>    handheld phone adds motion MOG2 reads as foreground).
 > 2. **Record the other two ripping styles** for label coverage — speed-rip → hit
 >    (`SPEED_RIPPED`) and fan/hitless (`NO_HIT`); the `COMPLETE` path is done.
 >
@@ -261,17 +261,47 @@
   ORB match ~337 ms → ~3 recognitions/sec, which is why live needs threading
   (numbers + full plan in the Phase 3.5 section).
 
-### Next action when resuming (do this first)
-**Two live tracks, both in the Phase 3.5 design section below:**
-1. **Phase 0 wiring (software, do now):** extract `recognize_step` from
-   `overlay.run`'s loop, drive it from `RecognitionWorker` on a smooth display
-   thread, make dwell time-based, feed BoundaryDetector the recognition rate.
-2. **Phase 1 validation (needs the user):** enable OBS Virtual Camera on the
-   tripod cam, `packcapture list-cameras` to get the index, then run the live
-   operator overlay and tune dwell/boundary.
+### Done so far (added 2026-06-23, cont. — live capture + operator GUI)
+This is the day's big arc; full detail is in the "Phase 3.5 design" section.
+- **Phase 0 wired + Phase 1 validated live (PR #4, merged):** `OverlayEngine`
+  (recognition step shared by the serial render and the live path), `run_live_threaded`
+  + `overlay … --threaded` (capture/recognition on background threads, smooth
+  display). **Validated live on real hardware:** iPhone → **Iriun Webcam @ 1080p**
+  (device index 0) → smooth video, cards recognized + priced, slide animation.
+  Fixed a threaded-only bug: the ticker slide was eaten by ~370 ms recognition
+  latency — now `last_log_frame` is stamped at log time (clock sampled lazily).
+- **Phase 2 — in-stream browser overlay (PR #5, open):** `overlay_server.py` —
+  stdlib HTTP + Server-Sent Events (no deps). `packcapture serve` runs recognition
+  headless and serves a **transparent HTML/CSS overlay** at `/overlay` for an OBS
+  **Browser Source** (real web font — fixes the cv2 "funny" text — CSS slide-up,
+  tier rarity colors, gold HIT). `ThreadedFrameSource(pace=...)` replays a file at
+  real time so the overlay can be previewed with no camera.
+- **Operator GUI (PR #5):** product decision — the overlay stays a *clean*
+  viewer page; the GUI is a **separate operator surface**. `packcapture gui` serves
+  `/control`: `RecognitionController` start/stop lifecycle, set + **camera pickers**,
+  live card log (rarity-colored, hits gold), totals, and **CSV/JSON export**
+  (Sheets-ready). Remembers last set + source. Endpoints `POST /api/start|stop`,
+  `GET /api/state|sets|cameras|export.csv|export.json`.
+- **Validated end-to-end:** `serve IMG_7032.MOV` → 29 cards / 3 packs (~matches
+  the 30/3 render); operator API → pack 1 closes **COMPLETE $2.79**; CSV exports
+  the logged cards with prices. **66 tests green.** README updated.
 
-Also still open (offline): record the other two ripping styles (speed-rip → hit
-for `SPEED_RIPPED`, fan/hitless for `NO_HIT`) — see the START HERE block.
+### Next action when resuming (do this first)
+**Stopping point 2026-06-23:** PRs #3 & #4 merged; **PR #5** (`phase3-browser-overlay`
+— in-stream overlay + operator GUI + export) is **open and green-pending CI**,
+ready to merge. The live operator overlay + the web overlay + the control panel
+are all validated (on `IMG_7032.MOV` and live via Iriun).
+
+**Do first:** merge PR #5 if CI is green. Then pick up from the "Phase 3.5"
+running lists — highest-value next pieces:
+1. **OBS Browser Source wiring** (needs the user at OBS): add `/overlay` as a
+   Browser Source + the no-feedback scene routing (recognize from the clean
+   Virtual Cam scene; overlay only in the Record/Stream scene).
+2. **GUI:** end-of-session report view; correct/undo a misrecognized card;
+   optional live Google-Sheets sync (Sheets API + OAuth).
+3. **SQLite session persistence** (durability + history; basis for pull-rate stats).
+4. **Live label tuning** on a real pack; off-keyboard: fixed phone mount + record
+   the speed-rip / fan-hitless styles.
 
 To re-render the validated clip, **render from the raw `IMG_7032.MOV`** (the
 clean camera source), not `IMG_7032_fixed.mp4` — that `_fixed` file is a *prior
@@ -550,36 +580,100 @@ hypeoverlay competitor (Phase 2). Same recognition core feeds both.
 ### Phase 0 — still to tune (needs a live source in hand)
 - **`run_live_threaded` is not yet validated against a live feed** — it's a
   composition of unit-tested parts (engine + threaded core) but hasn't faced a
-  real camera/window. First live run: a **phone-as-webcam** (Iriun/DroidCam/Camo)
-  or OBS Virtual Cam — see the START HERE physical to-do.
+  real camera/window.
 - **Tune `LIVE_RECOG_FPS` and the dwell** on real live cadence; consider true
   wall-clock dwell (currently a tick count) if recognition rate proves variable.
 
-### Phase 1 — operator window, live
-`packcapture overlay <obs-virtual-cam-index> --set me2 --threaded` is the operator
-window. User (off-keyboard): expose a camera to OpenCV — easiest pre-tripod is a
-**phone webcam app** (the phone becomes a normal device), or OBS Virtual Camera —
-then `packcapture list-cameras` for the index. Then validate + tune.
+### Phase 1 — operator window, live (DONE / validated 2026-06-23)
+`packcapture overlay 0 --set me2 --threaded` validated **live on real hardware**:
+iPhone → **Iriun Webcam** (free) → device index 0. At 640×480 it works but is
+pixelated; **bumped Iriun to 1080p** and it's sharp (OpenCV grabs 1080p by
+default once the device offers it — no resolution-request needed). Smooth video,
+cards recognized + priced, slide animation visible.
+- **Bug found + fixed live:** the ticker slide was invisible because
+  `last_log_frame` was stamped at the *start* of a ~370 ms recognition, eating
+  the 0.4 s slide window. Now stamped at log time (clock sampled lazily). Serial
+  path unaffected (draws the same frame it logs on).
+- **Known cosmetic:** the cv2 window uses OpenCV's Hershey vector font ("funny"
+  text). Not fixable in-window; **Phase 2's HTML/CSS overlay is the real fix** —
+  and it's viewer-facing, which is where font quality matters.
 
-### Phase 2 — in-stream overlay (viewer-facing)
-- New `overlay_server.py`: a tiny local HTTP + WebSocket server serving a
-  **transparent HTML/CSS** page that renders the *same* `OverlayState` pushed as
-  JSON (slide-up/fade + gradient panels become CSS — real alpha, crisper than
-  cv2 drawing).
-- OBS adds a **Browser Source** → `http://localhost:PORT/overlay`, composited over
-  the cam scene.
-- **No feedback loop (the subtle part):** packcapture *recognizes* from the OBS
-  **Virtual Cam scene = cam only**, and *outputs* to the Browser Source, which
-  lives only in the **Record/Stream scene = cam + browser**. Keep the Virtual Cam
-  scene clean and recognition never sees its own overlay. Document the OBS scene
-  setup.
-- `OverlayState` becomes the single source of truth feeding **two renderers**
-  (cv2 operator window + web view).
+### Phase 2 — in-stream browser overlay (BUILT 2026-06-23, branch `phase3-browser-overlay`)
+The viewer-facing overlay (like the competitor) AND the real-font fix. This is
+also the **substrate for the eventual web GUI** (a control-panel page on the same
+server) — so "web overlay → web GUI" is the planned UI direction, not OpenCV
+windows forever. Status:
+- [x] **`overlay_server.py`** — stdlib HTTP server (no new deps) + **Server-Sent
+  Events** for one-way state push. Serves the overlay page at `/overlay` and the
+  state stream at `/events`. `OverlayServer.publish(state)` dedupes (only bumps
+  the SSE seq on real change). `state_to_payload` serializes `OverlayState`
+  (formatted prices, BGR→hex rarity color, `count` as the new-card trigger).
+- [x] **`packcapture serve <src> --set me2`** — runs the engine headless (same
+  threaded core as `--threaded`) and publishes `engine.snapshot()` at ~20 Hz;
+  prints the OBS URL + scene-routing note.
+- [x] **The overlay page** (inline HTML/CSS/JS in `overlay_server.py`) — ticker +
+  analytics panels mirroring the cv2 layout (dark glass, red→orange stripe,
+  tier-colored rarity, gold HIT), **CSS slide-up** restarted on a new card, real
+  web font. Transparent `body` for OBS.
+- [x] **Frame pacing for file replay** — `ThreadedFrameSource(pace=...)`: a live
+  camera stays real-time/drop-stale, but a **file** is paced to its own fps so the
+  threaded recognizer replays it like a live feed (a file would otherwise race
+  through and the worker would sample ~nothing). Lets us preview/validate the
+  overlay against `IMG_7032.MOV` with no camera.
+- [x] **Tests** (`tests/test_overlay_server.py`, +pacing in test_threaded) — 59 green.
+- **Validated:** `serve IMG_7032.MOV --set me2` → **29 cards / 3 packs**
+  (~matches the serial render's 30/3). Note: the threaded path samples ~3 recog/sec
+  vs serial's 30+, so fast montage clips (diag2) under-recognize — fine for live
+  (cards held; design optimizes for not missing *hits*), but it means the
+  in-stream overlay is intentionally less exhaustive than the offline `--save`.
+- [ ] **OBS validation (needs the user):** add a **Browser Source** →
+  `http://localhost:8770/overlay`, sized to the canvas, transparent. **No feedback
+  loop:** recognize from the clean **Virtual Cam scene = cam only**; the Browser
+  Source lives only in the **Record/Stream scene = cam + browser**. Document the
+  exact scene routing once confirmed live.
 
-### Cross-cutting
-- **Session persistence → SQLite** (Phase 4 anyway) gets urgent once sessions run
-  live for an hour — an in-memory `Session` loses everything on a crash. Do it
-  alongside Phase 1.
+### Operator GUI — web control panel (v1 BUILT 2026-06-23, branch `phase3-browser-overlay`)
+**Decision (user):** the overlay (ticker + analytics panels) stays a *clean,
+viewer-facing* page for OBS — never add controls to it. The **GUI is a separate
+operator surface**: `packcapture gui` serves a `/control` page (operator-only)
+on the *same* server, while `/overlay` stays the clean OBS page.
+- `RecognitionController` (in `overlay_server.py`) owns the start/stop lifecycle:
+  the operator picks a **set + source** in the browser and presses Start → it
+  spins up the engine + threaded worker; Stop tears down + finalizes. A file
+  source auto-ends. `serve` now also goes through the controller.
+- `/control` page: status dot, set dropdown (`/api/sets`), source input,
+  Start/Stop, live card log + running totals + pack-status breakdown
+  (polls `/api/state` ~0.6s). Endpoints: `POST /api/start`/`/api/stop`,
+  `GET /api/state`/`/api/sets`. Validated end-to-end: start on `IMG_7032.MOV` →
+  cards stream in, pack 1 closes **COMPLETE $2.79**, stop clean. 63 tests green.
+- **Export (DONE):** Export CSV / JSON buttons → `GET /api/export.csv|json`
+  (downloadable, timestamped). CSV is one row per card with a numeric price, so it
+  imports straight into Google Sheets. `session_csv()` builds it.
+- **Polish (DONE):** camera picker (`↻ cameras` → `/api/cameras` →
+  `enumerate_cameras`, fills a datalist; free-text file paths still work),
+  remembers last set + source (localStorage), and the card log color-codes rarity
+  + highlights hits (rare+ & >$1.50) in gold. 66 tests green.
+- **Next for the GUI:** end-of-session report view; correct/undo a misrecognized
+  card; live Google-Sheets sync (Sheets API + OAuth) if wanted later. The report
+  view + durable history tie to SQLite persistence below.
+
+### Still needed beyond Phase 2 (running list)
+- **Live recognition tuning:** validate COMPLETE/SPEED_RIPPED/NO_HIT *live* on a
+  real pack; tune `LIVE_RECOG_FPS` / dwell / boundary on real cadence.
+- **Session persistence → SQLite** (Phase 4): in-memory `Session` loses a long
+  live session on a crash; also the basis for pull-rate stats + export (Phase 5).
+- **Camera selection robustness:** `list-cameras` only surfaced index 0 (DSHOW
+  "can't capture by index" warnings); fine with one phone cam, but multi-camera
+  setups may need a `--backend` option or by-name selection.
+- **Physical (user):** record the other two rip styles (speed-rip → `SPEED_RIPPED`,
+  fan/hitless → `NO_HIT`); a **fixed phone mount** (static background for the
+  boundary detector); eventually the dedicated tripod camera.
+- **Infra:** set-bundling CI (build latest set → publish bundle as a release
+  asset) + `fetch-set <code>`; coverage badge once pytest-cov is in CI.
+- **Optional:** nicer cv2 operator-window font (Pillow/TrueType) — low priority,
+  Phase 2 supersedes it for the viewer-facing surface.
+
+### Cross-cutting note
 - **Latency:** overlay trails the real card by recognition latency + dwell
   (~0.5-0.8s). Fine for held cards; a card flashed faster than a dwell window
   won't log — same trade-off as offline.
@@ -589,7 +683,11 @@ then `packcapture list-cameras` for the index. Then validate + tune.
 ```
 src/packcapture/
   cli.py                 argparse entry point (build-set / match / list-sets /
-                         list-cameras / fetch-prices / fetch-meta / dev / overlay)
+                         list-cameras / fetch-prices / fetch-meta / dev / overlay /
+                         serve / gui)
+  overlay_server.py      the web layer: clean /overlay (viewer, SSE) for OBS +
+                         /control operator GUI (RecognitionController start/stop,
+                         live card log); serve (auto-start) and gui (operator) entries
   config.py              paths, API endpoints, ORB params
   mediautil.py           to_h264(): re-encode a render in place (shared)
   devmode.py             dev viewer: video + auto-ROI + scrolling log, side by side
@@ -603,11 +701,12 @@ src/packcapture/
     orb_matcher.py       set-locked matcher (ratio test + RANSAC)
   pipeline/              settle / confidence / roi / boundary / session / runner
   capture/source.py      FrameSource: webcam / OBS / video file
-  capture/threaded.py    ThreadedFrameSource + RecognitionWorker (real-time core)
+  capture/threaded.py    ThreadedFrameSource (+ file pacing) + RecognitionWorker (real-time core)
   capture/devices.py     enumerate_cameras(): probe indices for `list-cameras`
   storage/bundle.py      load/save the on-disk bundle (price + supertype columns optional)
-tests/                   pytest suite (52 tests; test_threaded.py + test_overlay.py
-                         OverlayEngine cover the live core)
+tests/                   pytest suite (63 tests; test_threaded / test_overlay
+                         (OverlayEngine) / test_overlay_server (web + control) cover
+                         the live + web core)
 ```
 
 ## Dev setup (Windows)

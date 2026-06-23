@@ -22,6 +22,7 @@ they unit-test against synthetic frame sources with no camera or bundle.
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any, Callable, Optional, Tuple, Union
 
 import numpy as np
@@ -60,15 +61,32 @@ class ThreadedFrameSource:
     ``frames()`` and ``release()`` -- the latter lets tests inject a fake.
     """
 
-    def __init__(self, source: Union[int, str, FrameSource], *, low_latency: bool = True):
+    def __init__(
+        self,
+        source: Union[int, str, FrameSource],
+        *,
+        low_latency: bool = True,
+        pace: Union[None, float, str] = None,
+    ):
+        """``pace`` throttles the reader: a float fps, or ``"source"`` to match the
+        source's own fps. Left ``None`` (live cameras) the reader grabs as fast as
+        the device delivers; pacing a *file* makes it replay at real time so the
+        recognizer samples it like a live feed instead of seeing dropped frames."""
         self._src = source if hasattr(source, "frames") else FrameSource(source)
         self._low_latency = low_latency
+        self._pace = pace
+        self._pace_dt = 0.0
         self._slot = LatestSlot()
         self._stopped = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
     def start(self) -> "ThreadedFrameSource":
         self._src.open()
+        if self._pace == "source":
+            fps = float(getattr(self._src, "fps", 0.0) or 0.0)
+            self._pace_dt = 1.0 / fps if fps > 0 else 0.0
+        elif isinstance(self._pace, (int, float)) and self._pace:
+            self._pace_dt = 1.0 / float(self._pace)
         if self._low_latency:
             # Best-effort: keep the driver buffer at one frame so we read the
             # newest grab, not a backlog. Not all backends honor it; ignore.
@@ -86,10 +104,16 @@ class ThreadedFrameSource:
 
     def _run(self) -> None:
         try:
+            next_t = time.monotonic()
             for frame in self._src.frames():
                 if self._stopped.is_set():
                     break
                 self._slot.set(frame)
+                if self._pace_dt:
+                    next_t += self._pace_dt
+                    delay = next_t - time.monotonic()
+                    if delay > 0 and self._stopped.wait(delay):
+                        break
         finally:
             self._stopped.set()
 

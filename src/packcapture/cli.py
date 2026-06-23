@@ -98,6 +98,23 @@ def cmd_overlay(args: argparse.Namespace) -> int:
     )
 
 
+def cmd_gui(args: argparse.Namespace) -> int:
+    from .overlay_server import gui
+
+    return gui(set_code=args.set, host=args.host, port=args.port)
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    from .overlay_server import serve
+
+    source: object = int(args.source) if str(args.source).isdigit() else args.source
+    stable = args.stable_frames if args.stable_frames is not None else 2
+    return serve(
+        source, args.set, host=args.host, port=args.port,
+        min_inliers=args.min_inliers, stable_frames=stable, export=args.export,
+    )
+
+
 def cmd_list_cameras(args: argparse.Namespace) -> int:
     from .capture.devices import enumerate_cameras
 
@@ -191,6 +208,26 @@ def build_parser() -> argparse.ArgumentParser:
     o.add_argument("--reset-layout", action="store_true",
                    help="Ignore the saved panel layout and start from default positions")
     o.set_defaults(func=cmd_overlay)
+
+    g = sub.add_parser("gui",
+                       help="Operator control panel in the browser (start/stop, live log, report)")
+    g.add_argument("--set", default=None, help="Preselect a set (optional; pick it in the page)")
+    g.add_argument("--host", default="127.0.0.1", help="Bind address (default 127.0.0.1)")
+    g.add_argument("--port", type=int, default=8770, help="HTTP port (default 8770)")
+    g.set_defaults(func=cmd_gui)
+
+    sv = sub.add_parser("serve",
+                        help="Serve the live overlay as a web page for an OBS Browser Source")
+    sv.add_argument("source", help="Webcam/OBS device index (e.g. 0) or a video file path")
+    sv.add_argument("--set", required=True, help="Set code of a built bundle")
+    sv.add_argument("--host", default="127.0.0.1", help="Bind address (default 127.0.0.1)")
+    sv.add_argument("--port", type=int, default=8770, help="HTTP port (default 8770)")
+    sv.add_argument("--export", help="Write a per-card/per-pack analytics JSON on exit")
+    sv.add_argument("--stable-frames", type=int, default=None,
+                    help="Recognitions an accepted card must persist before logging (default 2)")
+    sv.add_argument("--min-inliers", type=int, default=25,
+                    help="Confidence-gate inlier floor (lower for low-res footage)")
+    sv.set_defaults(func=cmd_serve)
 
     lc = sub.add_parser("list-cameras",
                         help="Probe device indices (find the OBS Virtual Cam)")

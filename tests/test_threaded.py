@@ -119,6 +119,24 @@ def test_recognition_worker_processes_only_new_frames():
     assert results == sorted(results)  # frames handled in arrival order
 
 
+def test_paced_source_replays_at_rate_without_dropping():
+    # Without pacing a fast producer is sampled sparsely; pacing to a low fps
+    # slows the reader so a consumer sees most frames in arrival order.
+    src = FakeSource(count=6, interval=0.0)
+    tfs = ThreadedFrameSource(src, pace=60.0).start()  # ~16ms between frames
+    start = time.time()
+    seen = []
+    while not tfs.stopped:
+        seq, frame = tfs.latest()
+        if frame is not None and (not seen or seen[-1] != seq):
+            seen.append(seq)
+        time.sleep(0.002)
+    elapsed = time.time() - start
+    tfs.stop()
+    assert elapsed >= 6 / 60 * 0.7    # reader was throttled, not instant
+    assert len(seen) >= 4             # saw most frames (vs heavy dropping)
+
+
 def test_recognition_worker_skips_none_results():
     slot = LatestSlot()
     slot.set(np.zeros((2, 2, 3), np.uint8))
