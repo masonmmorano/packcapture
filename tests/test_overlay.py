@@ -1,20 +1,28 @@
-"""Price selection, overlay drawing, and the analytics export report."""
+"""Price selection, overlay drawing, the analytics export, and the engine."""
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 import cv2
 
+from _synth import FakeClient, synth_card
+
 from packcapture.overlay import (
     LayoutDrag,
+    OverlayEngine,
     OverlayState,
     _build_report,
     draw_overlay,
     load_layout,
     save_layout,
 )
+from packcapture.pipeline.confidence import ConfidenceGate, GateConfig
 from packcapture.pipeline.session import Session
+from packcapture.recognize.orb_matcher import Matcher
+from packcapture.setbuild.builder import build_set
 from packcapture.setbuild.prices import select_raw_price
+from packcapture.storage.bundle import load_bundle
 
 
 def test_select_raw_price_prefers_normal_then_market():
@@ -113,3 +121,82 @@ def test_draw_overlay_smoke():
     assert out.sum() > 0
     # The original frame is untouched (draw_overlay copies).
     assert frame.sum() == 0
+
+
+# --- OverlayEngine (the recognition step shared by serial + threaded paths) ---
+
+PACK_RARITIES = (
+    ["Common"] * 4 + ["Uncommon"] * 3 + ["Common", "Uncommon"] + ["Double Rare"]
+)
+
+
+class _FullFrameROI:
+    """ROI stub: box the whole frame, no motion -- isolates the logging logic
+    from the MOG2 auto-ROI (which is exercised separately in test_roi)."""
+
+    last_motion = 0.0
+
+    def detect(self, frame):
+        h, w = frame.shape[:2]
+        return (0, 0, w, h)
+
+
+class _Identity:
+    def update(self, roi):
+        return roi
+
+
+@pytest.fixture()
+def pack_bundle(tmp_path, monkeypatch):
+    monkeypatch.setenv("PACKCAPTURE_DATA_DIR", str(tmp_path / "sets"))
+    build_set("fake", force=True, client=FakeClient(n=10, rarities=PACK_RARITIES))
+    return load_bundle("fake")
+
+
+def _engine(bundle, **kw):
+    eng = OverlayEngine(
+        Matcher(bundle),
+        # Low floor: synthetic descriptors are dense; keep the gate logic
+        # exercised without depending on exact synthetic inlier counts.
+        ConfidenceGate(GateConfig(min_inliers=10, margin_ratio=1.2, noise_floor=5)),
+        Session("fake"),
+        {f"fake-{i}": (round(0.10 * (i + 1), 2), "normal") for i in range(10)},
+        OverlayState(set_name="Fake"),
+        boundary_fps=3.0, stable_frames=2, evidence_inliers=5, **kw,
+    )
+    eng.roi_detector = _FullFrameROI()
+    eng.smoother = _Identity()
+    return eng
+
+
+def test_engine_logs_cards_from_recognition(pack_bundle):
+    eng = _engine(pack_bundle)
+    clock = 0
+    for i in range(10):
+        img = synth_card(i + 1)
+        for _ in range(eng.stable_frames):  # hold each card long enough to log
+            clock += 1
+            eng.process(img, lambda: clock)
+    assert eng.st.count == 10
+    assert round(eng.st.total, 2) == round(sum(0.10 * (i + 1) for i in range(10)), 2)
+    pack = eng.session.close_pack()
+    assert [c.card_id for c in pack.cards] == [f"fake-{i}" for i in range(10)]
+
+
+def test_engine_clock_drives_last_log_frame(pack_bundle):
+    # last_log_frame must be the clock value at the logging tick, so the ticker
+    # slide animation reads correctly whatever drives the clock.
+    eng = _engine(pack_bundle)
+    img = synth_card(1)
+    eng.process(img, lambda: 100)     # cur_n = 1
+    eng.process(img, lambda: 12345)   # cur_n = 2 == stable_frames -> logs, clock sampled now
+    assert eng.st.count == 1
+    assert eng.st.last_log_frame == 12345
+
+
+def test_engine_snapshot_is_independent_copy(pack_bundle):
+    eng = _engine(pack_bundle)
+    snap = eng.snapshot()
+    assert snap is not eng.st
+    eng.st.count = 99
+    assert snap.count != 99  # snapshot is a point-in-time copy
