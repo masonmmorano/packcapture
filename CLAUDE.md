@@ -286,22 +286,46 @@ This is the day's big arc; full detail is in the "Phase 3.5 design" section.
   the 30/3 render); operator API → pack 1 closes **COMPLETE $2.79**; CSV exports
   the logged cards with prices. **66 tests green.** README updated.
 
-### Next action when resuming (do this first)
-**Stopping point 2026-06-23:** PRs #3 & #4 merged; **PR #5** (`phase3-browser-overlay`
-— in-stream overlay + operator GUI + export) is **open and green-pending CI**,
-ready to merge. The live operator overlay + the web overlay + the control panel
-are all validated (on `IMG_7032.MOV` and live via Iriun).
+### Done so far (added 2026-06-23, cont. 2 — OBS verified live + GUI polish)
+PR #5 merged. New branch `obs-overlay-verify`. **The in-stream overlay is now
+verified working live in OBS** (user captured a clean demo video; recognition
+ran a bit slow, see below).
+- **OBS live setup that works (the validated steps — now in the wiki):** phone via
+  **Iriun Webcam**; OBS captures the camera + a **Browser Source** = `/overlay`.
+  **Camera is exclusive** — OBS and PackCapture can't both open it (PackCapture got
+  black frames), so use **OBS Virtual Camera**: gear next to *Start Virtual Camera*
+  → **Output Type = Source → the camera** (outputs a CLEAN feed, no overlay → no
+  feedback loop). `list-cameras` finds the virtual-cam index; recognize from it.
+- **Camera resolution fix:** `FrameSource` now requests **1920×1080** on devices.
+  The OBS Virtual Camera defaults to 640×480 over DirectShow unless asked; the
+  request bumps it to full HD (driver clamps to nearest). Files unaffected.
+- **GUI polish:** per-card **delete (✕)** + **Clear all** (`Session.remove_card`/
+  `clear`, engine serializes session writes under its lock); **pack-divider rows**
+  in the log instead of a pack column; **Test card** button (`/api/demo`) to verify
+  the overlay in OBS without a feed; camera picker, remembers last set+source, hits
+  highlighted. **Dwell lowered to 1** (log on first confident recognition) and the
+  ticker slide shortened to **0.22s**. **69 tests green.**
+- **Docs restructured:** README slimmed to a clean **Start it / Work it** quickstart
+  (links via `../../wiki/...`); all nuanced commands + the OBS walkthrough live on
+  the **GitHub wiki** (`Home`, `CLI-Reference`, `Live-and-OBS-Setup` — pushed to
+  `packcapture.wiki.git`). No `docs/` folder in the repo.
+- **Recognition speed reality:** one ORB match over 130 cards is ~337 ms → ~3
+  recognitions/sec, so live logging is ~0.3–0.5 s/card, not instant. **Lighting is
+  the practical lever** (poor light → weak/missed matches). The real speed lever is
+  a **matcher prefilter** (cheap rank → RANSAC only top-K) to cut ~337 ms → ~100 ms
+  — designed, **offered but not built**.
 
-**Do first:** merge PR #5 if CI is green. Then pick up from the "Phase 3.5"
-running lists — highest-value next pieces:
-1. **OBS Browser Source wiring** (needs the user at OBS): add `/overlay` as a
-   Browser Source + the no-feedback scene routing (recognize from the clean
-   Virtual Cam scene; overlay only in the Record/Stream scene).
-2. **GUI:** end-of-session report view; correct/undo a misrecognized card;
-   optional live Google-Sheets sync (Sheets API + OAuth).
-3. **SQLite session persistence** (durability + history; basis for pull-rate stats).
-4. **Live label tuning** on a real pack; off-keyboard: fixed phone mount + record
-   the speed-rip / fan-hitless styles.
+### Next action when resuming (do this first)
+**Stopping point 2026-06-23 (end of day 2):** all live work is on branch
+`obs-overlay-verify` (in-stream overlay verified in OBS, GUI delete/clear + polish,
+1080p camera fix, dwell=1, docs → wiki). **PR/merge this branch**, then:
+1. **Matcher prefilter** for real recognition speed (~3×; the user wants it faster;
+   lighting helped but the matcher is the ceiling). Test accuracy holds.
+2. **SQLite session persistence** (durability + history; basis for pull-rate stats).
+3. **GUI:** end-of-session report view; **drag-to-repack** (move a card between
+   packs — requested); optional live Google-Sheets sync (Sheets API + OAuth).
+4. **Live label tuning** on a real continuous rip; off-keyboard: fixed phone mount
+   + record the speed-rip / fan-hitless styles.
 
 To re-render the validated clip, **render from the raw `IMG_7032.MOV`** (the
 clean camera source), not `IMG_7032_fixed.mp4` — that `_fixed` file is a *prior
