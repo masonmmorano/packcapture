@@ -69,7 +69,8 @@ _RARITY_COLORS = {
 def _rarity_color(rarity: str):
     return _RARITY_COLORS.get((rarity or "").strip().lower(), INK)
 
-TICKER_ANIM_S = 0.40        # seconds for a new card to slide up into place
+TICKER_ANIM_S = 0.22        # seconds for a new card to slide up into place (snappy;
+                            # a new card also interrupts/restarts the slide)
 HIT_PRICE = 1.50            # a rare+ only earns the gold HIT tag above this raw price
 
 # Session slot-variant -> ticker display text.

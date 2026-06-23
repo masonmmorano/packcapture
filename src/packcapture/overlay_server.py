@@ -102,9 +102,9 @@ PAGE = r"""<!DOCTYPE html>
   /* Ticker (top-right, under the facecam) */
   #ticker { top: 150px; opacity: 0; }
   #ticker.show { opacity: 1; }
-  #ticker.bump { animation: slideup 0.4s cubic-bezier(.22,1,.36,1); }
+  #ticker.bump { animation: slideup 0.22s cubic-bezier(.22,1,.36,1); }
   @keyframes slideup {
-    from { transform: translateY(90px); opacity: 0; }
+    from { transform: translateY(55px); opacity: 0; }
     to   { transform: translateY(0);    opacity: 1; }
   }
   #name { font-size: 34px; font-weight: 700; letter-spacing: .2px; }
@@ -392,6 +392,10 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
   tr.hit td.name::after { content: " HIT"; color: #ffd23c; font-weight: 800; font-size: 12px; }
   button.del { padding: 2px 8px; background: #3a2a2a; border-color: #6f3c3c; color: #ff9a9a; font-weight: 700; }
   button.del:hover { background: #5a2f2f; }
+  tr.sep td { background: #1f2128; color: #c9c9c9; font-weight: 700; font-size: 13px;
+              letter-spacing: .6px; padding: 6px 10px; border-top: 2px solid #3a3d46; }
+  tr.sep .pv { color: #5adc78; margin-left: 10px; }
+  tr.sep .st-complete { color: #5adc78; } tr.sep .st-speed { color: #ffd23c; } tr.sep .st-open { color: #8ab4ff; }
   .err { color: #ff7a7a; margin: 8px 0; min-height: 16px; }
   .hint { color: #8a8a8a; font-size: 13px; }
   a { color: #8ab4ff; }
@@ -425,7 +429,7 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
   </div>
   <div class="hint" style="margin-bottom:14px">Click ✕ to delete a mis-scan; CSV opens directly in Google Sheets (File → Import) / Excel.</div>
   <table>
-    <thead><tr><th>#</th><th>Card</th><th>No.</th><th>Rarity</th><th>Variant</th><th>Pack</th><th>Price</th><th></th></tr></thead>
+    <thead><tr><th>#</th><th>Card</th><th>No.</th><th>Rarity</th><th>Variant</th><th>Price</th><th></th></tr></thead>
     <tbody id="rows"></tbody>
   </table>
 </main>
@@ -479,15 +483,28 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
       el("t-packs").textContent = t.packs||0;
       el("t-value").textContent = t.value_str||"$0.00";
       el("t-status").textContent = statusCounts(t.by_status||{});
-      var rows = (s.cards||[]).map(function(c, i){
+      // Newest first, with a divider row between packs (instead of a pack column).
+      var cards = s.cards || [];
+      var html = "", lastKey;
+      for (var k = cards.length - 1; k >= 0; k--) {
+        var c = cards[k];
+        var key = (c.pack == null) ? "open" : c.pack;
+        if (key !== lastKey) {
+          lastKey = key;
+          var label, cls;
+          if (c.pack == null) { label = "Current pack"; cls = "st-open"; }
+          else { label = "Pack " + c.pack; cls = (c.status === "complete") ? "st-complete"
+                       : (c.status === "speed_ripped") ? "st-speed" : ""; }
+          var stx = (c.status && c.status !== "open") ? " · <span class='"+cls+"'>"+c.status.toUpperCase().replace("_"," ")+"</span>" : "";
+          html += "<tr class='sep'><td colspan='7'>"+label+stx+"</td></tr>";
+        }
         var rc = c.rarity_color || "#e8e8e8";
-        return "<tr class='"+(c.is_hit?"hit":"")+"'><td>"+(i+1)+"</td><td class='name'>"+c.name+
-               "</td><td>"+(c.number||"")+"</td><td style='color:"+rc+"'>"+(c.rarity||"")+
-               "</td><td>"+(c.variant||"")+"</td><td>"+(c.pack==null?"open":c.pack)+
-               "</td><td class='price'>"+c.price_str+"</td>"+
-               "<td><button class='del' data-i='"+i+"' title='Delete this card'>✕</button></td></tr>";
-      }).reverse().join("");
-      el("rows").innerHTML = rows;
+        html += "<tr class='"+(c.is_hit?"hit":"")+"'><td>"+(k+1)+"</td><td class='name'>"+c.name+
+                "</td><td>"+(c.number||"")+"</td><td style='color:"+rc+"'>"+(c.rarity||"")+
+                "</td><td>"+(c.variant||"")+"</td><td class='price'>"+c.price_str+"</td>"+
+                "<td><button class='del' data-i='"+k+"' title='Delete this card'>✕</button></td></tr>";
+      }
+      el("rows").innerHTML = html;
     }).catch(function(){});
   }
   setInterval(poll, 600); poll();
