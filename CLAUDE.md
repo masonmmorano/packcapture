@@ -261,21 +261,47 @@
   ORB match ~337 ms → ~3 recognitions/sec, which is why live needs threading
   (numbers + full plan in the Phase 3.5 section).
 
+### Done so far (added 2026-06-23, cont. — live capture + operator GUI)
+This is the day's big arc; full detail is in the "Phase 3.5 design" section.
+- **Phase 0 wired + Phase 1 validated live (PR #4, merged):** `OverlayEngine`
+  (recognition step shared by the serial render and the live path), `run_live_threaded`
+  + `overlay … --threaded` (capture/recognition on background threads, smooth
+  display). **Validated live on real hardware:** iPhone → **Iriun Webcam @ 1080p**
+  (device index 0) → smooth video, cards recognized + priced, slide animation.
+  Fixed a threaded-only bug: the ticker slide was eaten by ~370 ms recognition
+  latency — now `last_log_frame` is stamped at log time (clock sampled lazily).
+- **Phase 2 — in-stream browser overlay (PR #5, open):** `overlay_server.py` —
+  stdlib HTTP + Server-Sent Events (no deps). `packcapture serve` runs recognition
+  headless and serves a **transparent HTML/CSS overlay** at `/overlay` for an OBS
+  **Browser Source** (real web font — fixes the cv2 "funny" text — CSS slide-up,
+  tier rarity colors, gold HIT). `ThreadedFrameSource(pace=...)` replays a file at
+  real time so the overlay can be previewed with no camera.
+- **Operator GUI (PR #5):** product decision — the overlay stays a *clean*
+  viewer page; the GUI is a **separate operator surface**. `packcapture gui` serves
+  `/control`: `RecognitionController` start/stop lifecycle, set + **camera pickers**,
+  live card log (rarity-colored, hits gold), totals, and **CSV/JSON export**
+  (Sheets-ready). Remembers last set + source. Endpoints `POST /api/start|stop`,
+  `GET /api/state|sets|cameras|export.csv|export.json`.
+- **Validated end-to-end:** `serve IMG_7032.MOV` → 29 cards / 3 packs (~matches
+  the 30/3 render); operator API → pack 1 closes **COMPLETE $2.79**; CSV exports
+  the logged cards with prices. **66 tests green.** README updated.
+
 ### Next action when resuming (do this first)
-**Phase 0 + Phase 1 are DONE and merged (PRs #3 & #4 to main).** The live operator
-overlay (`overlay 0 --set me2 --threaded`) is validated on real hardware (iPhone
-+ Iriun Webcam @ 1080p): smooth video, recognition + pricing, slide animation.
+**Stopping point 2026-06-23:** PRs #3 & #4 merged; **PR #5** (`phase3-browser-overlay`
+— in-stream overlay + operator GUI + export) is **open and green-pending CI**,
+ready to merge. The live operator overlay + the web overlay + the control panel
+are all validated (on `IMG_7032.MOV` and live via Iriun).
 
-**Now building: Phase 2 — in-stream browser overlay** (branch
-`phase3-browser-overlay`). See the "Phase 2 — what's still needed" checklist in
-the Phase 3.5 design section, and the "Still needed beyond Phase 2" running list.
-Short version: a stdlib HTTP+SSE server serving a transparent HTML/CSS overlay
-that OBS adds as a Browser Source — viewer-facing, and it fixes the cv2 "funny"
-font where it matters.
-
-Other open items (running list in Phase 3.5): live label tuning on a real pack,
-SQLite session persistence, and the off-keyboard recording of the speed-rip /
-fan-hitless styles.
+**Do first:** merge PR #5 if CI is green. Then pick up from the "Phase 3.5"
+running lists — highest-value next pieces:
+1. **OBS Browser Source wiring** (needs the user at OBS): add `/overlay` as a
+   Browser Source + the no-feedback scene routing (recognize from the clean
+   Virtual Cam scene; overlay only in the Record/Stream scene).
+2. **GUI:** end-of-session report view; correct/undo a misrecognized card;
+   optional live Google-Sheets sync (Sheets API + OAuth).
+3. **SQLite session persistence** (durability + history; basis for pull-rate stats).
+4. **Live label tuning** on a real pack; off-keyboard: fixed phone mount + record
+   the speed-rip / fan-hitless styles.
 
 To re-render the validated clip, **render from the raw `IMG_7032.MOV`** (the
 clean camera source), not `IMG_7032_fixed.mp4` — that `_fixed` file is a *prior
