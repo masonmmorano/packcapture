@@ -72,7 +72,7 @@ Add it in OBS as a **Browser Source** and it floats the price ticker + pack
 analytics over your camera for viewers.
 
 <p align="center">
-  <img src="assets/live-detection.png" alt="Live recognition composited in OBS" width="100%"><br>
+  <img src="assets/detection2.png" alt="Live recognition composited in OBS" width="100%"><br>
   <sub>Live in OBS: a card recognized as it's scanned — the price ticker pops the card + raw price, with the running pack-analytics panel.</sub>
 </p>
 
