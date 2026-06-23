@@ -666,7 +666,7 @@ def run_live_threaded(
     source: Union[int, str],
     set_code: str,
     export: Optional[str] = None,
-    stable_frames: int = 2,
+    stable_frames: int = 1,
     min_inliers: int = 25,
     top: int = 5,
     evidence_inliers: int = 15,

@@ -256,7 +256,7 @@ class RecognitionController:
     def running(self) -> bool:
         return self._worker is not None
 
-    def start(self, source, set_code, min_inliers: int = 25, stable_frames: int = 2):
+    def start(self, source, set_code, min_inliers: int = 25, stable_frames: int = 1):
         with self._lock:
             if self._worker is not None:
                 return False, "already running"
@@ -724,7 +724,7 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 8770,
     min_inliers: int = 25,
-    stable_frames: int = 2,
+    stable_frames: int = 1,
     export: Optional[str] = None,
     max_seconds: Optional[float] = None,
 ) -> int:
