@@ -29,10 +29,17 @@ class FakeClient:
     defaults to all "Common" for the recognition-only tests.
     """
 
-    def __init__(self, n: int = 5, rarities: list[str] | None = None):
+    def __init__(
+        self,
+        n: int = 5,
+        rarities: list[str] | None = None,
+        supertypes: list[str] | None = None,
+    ):
         self.n = n
         if rarities is not None:
             assert len(rarities) == n, "rarities must have one entry per card"
+        if supertypes is not None:
+            assert len(supertypes) == n, "supertypes must have one entry per card"
         self._images: dict[str, bytes] = {}
         self._cards = []
         for i in range(n):
@@ -46,6 +53,7 @@ class FakeClient:
                     "number": str(i + 1),
                     "name": f"Card {i + 1}",
                     "rarity": rarities[i] if rarities is not None else "Common",
+                    "supertype": supertypes[i] if supertypes is not None else "Pokémon",
                     "images": {"large": url, "small": url},
                 }
             )

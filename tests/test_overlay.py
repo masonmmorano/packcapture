@@ -3,7 +3,16 @@ from __future__ import annotations
 
 import numpy as np
 
-from packcapture.overlay import OverlayState, _build_report, draw_overlay
+import cv2
+
+from packcapture.overlay import (
+    LayoutDrag,
+    OverlayState,
+    _build_report,
+    draw_overlay,
+    load_layout,
+    save_layout,
+)
 from packcapture.pipeline.session import Session
 from packcapture.setbuild.prices import select_raw_price
 
@@ -65,6 +74,31 @@ def test_build_report_handles_missing_price():
     report = _build_report(session, {}, "me2", "Set", "clip.mp4")
     assert report["totals"]["total_raw_value"] == 0.0
     assert report["packs"][0]["cards"][0]["price"] is None
+
+
+def test_layout_round_trip(tmp_path, monkeypatch):
+    import packcapture.overlay as ov
+
+    monkeypatch.setattr(ov, "set_dir", lambda code: tmp_path / code)
+    assert load_layout("me2") == (None, None)
+    save_layout("me2", [10, 20], [30, 40])
+    assert load_layout("me2") == ([10, 20], [30, 40])
+
+
+def test_layout_drag_moves_panel_clamped():
+    drag = LayoutDrag()
+    drag.ensure(1280, 720)
+    # Grab the analytics panel (bottom-right) by its top-left and drag off-screen.
+    ax, ay = drag.analytics
+    drag.on_mouse(cv2.EVENT_LBUTTONDOWN, ax + 2, ay + 2, 0, None)
+    drag.on_mouse(cv2.EVENT_MOUSEMOVE, 100, 100, 0, None)
+    assert drag.dirty
+    assert drag.analytics[0] < ax and drag.analytics[1] < ay
+    # Drag far past the right edge: origin clamps so the box stays in-frame.
+    drag.on_mouse(cv2.EVENT_MOUSEMOVE, 5000, 5000, 0, None)
+    drag.on_mouse(cv2.EVENT_LBUTTONUP, 5000, 5000, 0, None)
+    assert 0 <= drag.analytics[0] <= 1280
+    assert 0 <= drag.analytics[1] <= 720
 
 
 def test_draw_overlay_smoke():

@@ -56,7 +56,9 @@ def _load_rows(db_path: Path) -> list[dict[str, Any]]:
         # may not have them, so select them only when present.
         cols = {row[1] for row in conn.execute("PRAGMA table_info(cards)")}
         base = ["idx", "card_id", "number", "name", "rarity", "set_code", "image_url"]
-        extra = [c for c in ("price", "price_variant", "price_updated") if c in cols]
+        # supertype is added by build (new bundles) or backfilled onto older ones;
+        # prices are added by fetch-prices. Select either only when present.
+        extra = [c for c in ("supertype", "price", "price_variant", "price_updated") if c in cols]
         cur = conn.execute(
             f"SELECT {', '.join(base + extra)} FROM cards ORDER BY idx"
         )
@@ -103,11 +105,11 @@ def save_bundle(
         conn.execute(
             "CREATE TABLE cards ("
             "idx INTEGER PRIMARY KEY, card_id TEXT UNIQUE, number TEXT, "
-            "name TEXT, rarity TEXT, set_code TEXT, image_url TEXT)"
+            "name TEXT, rarity TEXT, supertype TEXT, set_code TEXT, image_url TEXT)"
         )
         conn.executemany(
-            "INSERT INTO cards (idx, card_id, number, name, rarity, set_code, image_url) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO cards (idx, card_id, number, name, rarity, supertype, set_code, image_url) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     i,
@@ -115,6 +117,7 @@ def save_bundle(
                     r["number"],
                     r["name"],
                     r["rarity"],
+                    r.get("supertype", "") or "",
                     r["set_code"],
                     r["image_url"],
                 )

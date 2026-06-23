@@ -5,17 +5,18 @@
 
 ## Session log & how to resume
 
-> **⚠️ START HERE — Claude, before anything else this session, remind the user of
-> their physical (off-keyboard) to-do.** Final validation of the rip-mode
-> pipeline is blocked on it:
-> 1. **Record real `me2` pack rips in three styles** (fixed point-and-rip camera,
->    native res): full top-to-top flip, speed-rip straight to the hit, and quick
->    fan / hitless. Drop the files in `scratch/footage/`. **Blocker noted
->    2026-06-10: user has no tripod yet.**
-> 2. ~~Eyeball the inter-pack gap in `rip_long.mp4`~~ — **DONE 2026-06-10**
->    (gap ≈ 4–6s; see the 2026-06-10 block below).
+> **⚠️ START HERE — first real tripod footage has LANDED and validated
+> (2026-06-23).** The long-standing blocker is cleared: `IMG_7032.MOV` (3 real
+> me2 packs, fixed tripod, native res) was transcoded to
+> `scratch/footage/IMG_7032_fixed.mp4` and run through the overlay pipeline —
+> **all 3 packs closed `COMPLETE`** with correct reverse-holo slot labels (this
+> drove the energy-exclusion fix; see the 2026-06-23 block below).
 >
-> Surface this first, then continue. (Also in memory: `physical-todo-real-pack-footage`.)
+> Remaining physical to-do (still off-keyboard, lower priority now): record the
+> other two ripping styles for label coverage — **speed-rip straight to the hit**
+> (`SPEED_RIPPED`) and **quick fan / hitless** (`NO_HIT`). The `COMPLETE` path is
+> now validated on real footage; these two would validate the other status
+> labels. (Also in memory: `physical-todo-real-pack-footage`.)
 
 **Repo:** https://github.com/masonmmorano/packcapture (public). Local:
 `C:\Users\Mason\Documents\repositories\packcapture`.
@@ -216,23 +217,55 @@
   (currently one representative price/card — switch to per-slot reverse-holo
   pricing once packs close as COMPLETE on real footage).
 
-### Next action when resuming (do this first)
-**Final validation still needs real tripod footage** (user has no tripod yet —
-see the START HERE block). The boundary detector + segmented session are built
-and probe-validated; what real footage adds: per-style label correctness
-(`COMPLETE`/`SPEED_RIPPED`/`NO_HIT`), hysteresis/burst threshold tuning on real
-cadence, and the checksum on a true factory-order pack.
+### Done so far (added 2026-06-23)
+- **First real tripod footage validated — the `COMPLETE` path works on real
+  packs.** `IMG_7032.MOV` (3 me2 packs, fixed tripod, native res, HEVC →
+  `IMG_7032_fixed.mp4`, 1920x1080 @ ~60fps, no pillarbox) run through
+  `packcapture overlay`: **30 cards / 3 packs, all `COMPLETE`**, checksum
+  reconciles, reverse-holo slots labeled by position. Total raw value **$8.08**,
+  avg pack **$2.69** (no chase hits in these three — all base-rarity packs).
+- **Energy exclusion + `supertype` bundle column (commit `b99fa46`).** The real
+  footage surfaced a bug: the inserted basic energy false-matched me2's own
+  **Ignition Energy #124** at the gate floor, logging a phantom 11th card →
+  demoted `COMPLETE` packs to `SPEED_RIPPED` and shifted the reverse-holo slots.
+  Fix: store card `supertype` in the bundle and **exclude energy-supertype
+  matches from logging** across runner/overlay/devmode.
+  - `build-set` now stores `supertype`; new **`fetch-meta`** backfills existing
+    bundles via the lightweight metadata API (no ORB rebuild). Loader/saver treat
+    it as optional so older bundles still load.
+  - me2 re-typed in the committed bundle: **110 Pokémon / 19 Trainer / 1 Energy**.
+- **Overlay restyle (same commit).** Ticker + analytics panels are now
+  **draggable** in the live window; layout persists per set at
+  `sets/<code>/overlay_layout.json` and is reused by `--save` renders
+  (`--reset-layout` to ignore it). Fixed ticker line overlap + analytics
+  overflow; red-orange gradient accent stripe on both panels. Ticker now shows
+  the **slot variant** (reverse holo) rather than the price printing, the exact
+  rarity **color-coded by tier**, and the gold **HIT** tag requires rare+ AND raw
+  price > $1.50.
+- **Tests: 44 green** (added energy exclusion, supertype round-trip, layout drag).
 
-Once real footage is dropped in: transcode if HEVC, **check for pillarbox bars**
-(`ffmpeg -i in.mp4 -vf cropdetect -t 20 -f null -`), then:
+### Next action when resuming (do this first)
+**The `COMPLETE` path is validated on real footage.** What's left for full
+status-label coverage: record the other two ripping styles (speed-rip → hit for
+`SPEED_RIPPED`, fan/hitless for `NO_HIT`) — see the START HERE block. Those tune
+hysteresis/burst thresholds on real cadence for the non-COMPLETE labels.
+
+To re-render the validated clip, **render from the raw `IMG_7032.MOV`** (the
+clean camera source), not `IMG_7032_fixed.mp4` — that `_fixed` file is a *prior
+overlay render with the overlay burned into the pixels*, so feeding it back in
+double-stamps the overlay AND the burned-in corner panels knock two borderline
+cards below the gate (packs demote COMPLETE → SPEED_RIPPED). On the raw MOV the
+result is the validated **30 cards / 3 packs / all COMPLETE / $8.08**:
 
 ```powershell
-# transcode (with cropdetect-found crop if pillarboxed), then dev at default gate
-ffmpeg -i "scratch/footage/<in>.mp4" -vf "crop=W:H:X:Y" -c:v libx264 -crf 18 -preset fast -an "scratch/footage/<out>.mp4"
-.\.venv\Scripts\python.exe -m packcapture dev scratch\footage\<out>.mp4 --set me2 --save scratch\footage\<out>_dev.mp4
+.\.venv\Scripts\python.exe -m packcapture overlay scratch\footage\IMG_7032.MOV --set me2 --save scratch\footage\IMG_7032_overlay_raw.mp4 --export scratch\footage\IMG_7032_overlay_raw.json
 ```
 
-Meanwhile buildable without footage: the **anchor-and-hold box machine** (lock a
+New footage: transcode if HEVC, **check for pillarbox bars**
+(`ffmpeg -i in.mp4 -vf cropdetect -t 20 -f null -`), then overlay (or `dev`) at
+the default gate.
+
+Buildable without more footage: the **anchor-and-hold box machine** (lock a
 card-sized box on the first confident match, hold through the pack, re-anchor on
 PACK_END — rides the same BoundaryDetector states), wiring the BoundaryDetector
 into `runner.py` (it's only in devmode so far), and Phase 4 below.
@@ -252,11 +285,21 @@ into `runner.py` (it's only in devmode so far), and Phase 4 below.
 - More YouTube footage needs `--cookies-from-browser` (bot challenge) and the
   tool sandbox disabled (CDN blocked); a phone photo of a real card dropped into
   the repo is the fastest clean test input.
-- Local-only scratch (git-ignored): `scratch/footage/` has `rip_long.mp4`
-  (ground-truth montage clip), `rip_window_dev_h264.mp4` (validated dev render),
-  `diag2.mp4` (working 10s clip); helper scripts `scratch/extract_frames.py`,
-  `match_frames.py`, `match_crop.py`, `boundary_probe.py` (boundary validation
-  vs. user-eyeballed timestamps).
+- **Never feed an overlay render back into the pipeline as a source.** A
+  `--save` render has the overlay burned into the pixels; re-running `overlay`/
+  `dev` on it double-stamps the panels and the burned-in corners block
+  recognition. Always render from the clean camera source (`IMG_7032.MOV`).
+  **Naming trap:** `scratch/footage/IMG_7032_fixed.mp4` *looks* like a clean
+  transcode but is actually a prior overlay render (old green-style overlay baked
+  in) — do not use it as input. The clean source is the raw `.MOV`; the current
+  validated render is `IMG_7032_overlay_raw.mp4`.
+- Local-only scratch (git-ignored): `scratch/footage/` has `IMG_7032.MOV` (raw
+  tripod source, 3 me2 packs — the clean recognition input), `IMG_7032_overlay_raw.mp4`
+  (validated all-COMPLETE overlay render), `rip_long.mp4` (ground-truth montage
+  clip), `rip_window_dev_h264.mp4` (validated dev render), `diag2.mp4` (working
+  10s clip); helper scripts `scratch/extract_frames.py`, `match_frames.py`,
+  `match_crop.py`, `boundary_probe.py` (boundary validation vs. user-eyeballed
+  timestamps).
 
 ## What it is
 
@@ -433,7 +476,7 @@ Store `supertype` in the bundle (helps classify energy), and add `variant`/
 ```
 src/packcapture/
   cli.py                 argparse entry point (build-set / match / list-sets /
-                         fetch-prices / dev / overlay)
+                         fetch-prices / fetch-meta / dev / overlay)
   config.py              paths, API endpoints, ORB params
   mediautil.py           to_h264(): re-encode a render in place (shared)
   devmode.py             dev viewer: video + auto-ROI + scrolling log, side by side
@@ -446,8 +489,8 @@ src/packcapture/
     orb_matcher.py       set-locked matcher (ratio test + RANSAC)
   pipeline/              settle / confidence / roi / boundary / session / runner
   capture/source.py      FrameSource: webcam / OBS / video file
-  storage/bundle.py      load/save the on-disk bundle (price columns optional)
-tests/                   pytest suite (40 tests; test_overlay.py covers price+export)
+  storage/bundle.py      load/save the on-disk bundle (price + supertype columns optional)
+tests/                   pytest suite (44 tests; test_overlay.py covers price+export)
 ```
 
 ## Dev setup (Windows)
