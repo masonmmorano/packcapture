@@ -13,12 +13,12 @@
 > from the raw `.MOV`, never the burned-in `_fixed` file; see gotchas). This drove
 > the energy-exclusion fix (see the 2026-06-23 block below).
 >
-> Remaining physical to-do (off-keyboard):
-> 1. **Live-capture validation (newly unblocked).** The live threaded overlay is
->    built (`overlay … --threaded`) but unproven on a real feed. Pre-tripod, use a
->    **phone as a webcam** (Iriun/DroidCam/Camo → phone shows up as a device; or
->    into OBS → Virtual Cam), `packcapture list-cameras` for the index, then run it.
->    Needs a fixed phone mount (static background for the boundary detector).
+> Live operator overlay is now **validated live** (2026-06-23): iPhone → Iriun
+> Webcam @ 1080p → `overlay 0 --set me2 --threaded`, smooth with the slide
+> animation. **Now building Phase 2** (in-stream browser overlay). Remaining
+> physical to-do (off-keyboard):
+> 1. **Fixed phone mount** — a static background for the boundary detector (a
+>    handheld phone adds motion MOG2 reads as foreground).
 > 2. **Record the other two ripping styles** for label coverage — speed-rip → hit
 >    (`SPEED_RIPPED`) and fan/hitless (`NO_HIT`); the `COMPLETE` path is done.
 >
@@ -262,16 +262,20 @@
   (numbers + full plan in the Phase 3.5 section).
 
 ### Next action when resuming (do this first)
-**Two live tracks, both in the Phase 3.5 design section below:**
-1. **Phase 0 wiring (software, do now):** extract `recognize_step` from
-   `overlay.run`'s loop, drive it from `RecognitionWorker` on a smooth display
-   thread, make dwell time-based, feed BoundaryDetector the recognition rate.
-2. **Phase 1 validation (needs the user):** enable OBS Virtual Camera on the
-   tripod cam, `packcapture list-cameras` to get the index, then run the live
-   operator overlay and tune dwell/boundary.
+**Phase 0 + Phase 1 are DONE and merged (PRs #3 & #4 to main).** The live operator
+overlay (`overlay 0 --set me2 --threaded`) is validated on real hardware (iPhone
++ Iriun Webcam @ 1080p): smooth video, recognition + pricing, slide animation.
 
-Also still open (offline): record the other two ripping styles (speed-rip → hit
-for `SPEED_RIPPED`, fan/hitless for `NO_HIT`) — see the START HERE block.
+**Now building: Phase 2 — in-stream browser overlay** (branch
+`phase3-browser-overlay`). See the "Phase 2 — what's still needed" checklist in
+the Phase 3.5 design section, and the "Still needed beyond Phase 2" running list.
+Short version: a stdlib HTTP+SSE server serving a transparent HTML/CSS overlay
+that OBS adds as a Browser Source — viewer-facing, and it fixes the cv2 "funny"
+font where it matters.
+
+Other open items (running list in Phase 3.5): live label tuning on a real pack,
+SQLite session persistence, and the off-keyboard recording of the speed-rip /
+fan-hitless styles.
 
 To re-render the validated clip, **render from the raw `IMG_7032.MOV`** (the
 clean camera source), not `IMG_7032_fixed.mp4` — that `_fixed` file is a *prior
@@ -550,36 +554,66 @@ hypeoverlay competitor (Phase 2). Same recognition core feeds both.
 ### Phase 0 — still to tune (needs a live source in hand)
 - **`run_live_threaded` is not yet validated against a live feed** — it's a
   composition of unit-tested parts (engine + threaded core) but hasn't faced a
-  real camera/window. First live run: a **phone-as-webcam** (Iriun/DroidCam/Camo)
-  or OBS Virtual Cam — see the START HERE physical to-do.
+  real camera/window.
 - **Tune `LIVE_RECOG_FPS` and the dwell** on real live cadence; consider true
   wall-clock dwell (currently a tick count) if recognition rate proves variable.
 
-### Phase 1 — operator window, live
-`packcapture overlay <obs-virtual-cam-index> --set me2 --threaded` is the operator
-window. User (off-keyboard): expose a camera to OpenCV — easiest pre-tripod is a
-**phone webcam app** (the phone becomes a normal device), or OBS Virtual Camera —
-then `packcapture list-cameras` for the index. Then validate + tune.
+### Phase 1 — operator window, live (DONE / validated 2026-06-23)
+`packcapture overlay 0 --set me2 --threaded` validated **live on real hardware**:
+iPhone → **Iriun Webcam** (free) → device index 0. At 640×480 it works but is
+pixelated; **bumped Iriun to 1080p** and it's sharp (OpenCV grabs 1080p by
+default once the device offers it — no resolution-request needed). Smooth video,
+cards recognized + priced, slide animation visible.
+- **Bug found + fixed live:** the ticker slide was invisible because
+  `last_log_frame` was stamped at the *start* of a ~370 ms recognition, eating
+  the 0.4 s slide window. Now stamped at log time (clock sampled lazily). Serial
+  path unaffected (draws the same frame it logs on).
+- **Known cosmetic:** the cv2 window uses OpenCV's Hershey vector font ("funny"
+  text). Not fixable in-window; **Phase 2's HTML/CSS overlay is the real fix** —
+  and it's viewer-facing, which is where font quality matters.
 
-### Phase 2 — in-stream overlay (viewer-facing)
-- New `overlay_server.py`: a tiny local HTTP + WebSocket server serving a
-  **transparent HTML/CSS** page that renders the *same* `OverlayState` pushed as
-  JSON (slide-up/fade + gradient panels become CSS — real alpha, crisper than
-  cv2 drawing).
-- OBS adds a **Browser Source** → `http://localhost:PORT/overlay`, composited over
-  the cam scene.
-- **No feedback loop (the subtle part):** packcapture *recognizes* from the OBS
-  **Virtual Cam scene = cam only**, and *outputs* to the Browser Source, which
-  lives only in the **Record/Stream scene = cam + browser**. Keep the Virtual Cam
-  scene clean and recognition never sees its own overlay. Document the OBS scene
-  setup.
-- `OverlayState` becomes the single source of truth feeding **two renderers**
-  (cv2 operator window + web view).
+### Phase 2 — in-stream browser overlay (NEXT — what's still needed)
+The viewer-facing overlay (like the competitor) AND the real-font fix. Build
+checklist:
+- [ ] **`overlay_server.py`** — a tiny **stdlib** HTTP server (no new deps;
+  prefer **Server-Sent Events** over WebSocket for one-way state push) serving:
+  (a) a transparent HTML/CSS/JS overlay page, (b) an SSE endpoint streaming the
+  current `OverlayState` as JSON. `publish(state)` updates a latest-state slot.
+- [ ] **`packcapture serve <src> --set me2`** — runs the engine headless
+  (ThreadedFrameSource + RecognitionWorker, same core as `--threaded`) and pushes
+  `engine.snapshot()` to the server on each update; prints the OBS URL.
+- [ ] **The overlay page** — ticker + analytics panels in HTML/CSS mirroring the
+  cv2 layout (dark panels, red-orange gradient stripe, per-tier rarity colors,
+  gold HIT), **slide-up/fade as a CSS transition** triggered on a new card
+  (e.g. `count` change), real web font. Transparent `body` so OBS keys it out.
+- [ ] **`OverlayState → JSON`** helper (formatted price strings, a new-card seq).
+  `OverlayState` becomes the single source of truth for **two renderers** (cv2
+  window + web view).
+- [ ] **OBS docs** — add a **Browser Source** → `http://localhost:PORT/overlay`,
+  sized to the canvas, transparent. **No feedback loop:** recognize from the
+  clean **Virtual Cam scene = cam only**; the Browser Source lives only in the
+  **Record/Stream scene = cam + browser**, so recognition never sees its own
+  overlay. Document the exact scene routing.
+- [ ] **Tests** — JSON serialization/formatting; server serves the page; publish
+  updates the latest-state slot (keep SSE-stream tests non-flaky).
 
-### Cross-cutting
-- **Session persistence → SQLite** (Phase 4 anyway) gets urgent once sessions run
-  live for an hour — an in-memory `Session` loses everything on a crash. Do it
-  alongside Phase 1.
+### Still needed beyond Phase 2 (running list)
+- **Live recognition tuning:** validate COMPLETE/SPEED_RIPPED/NO_HIT *live* on a
+  real pack; tune `LIVE_RECOG_FPS` / dwell / boundary on real cadence.
+- **Session persistence → SQLite** (Phase 4): in-memory `Session` loses a long
+  live session on a crash; also the basis for pull-rate stats + export (Phase 5).
+- **Camera selection robustness:** `list-cameras` only surfaced index 0 (DSHOW
+  "can't capture by index" warnings); fine with one phone cam, but multi-camera
+  setups may need a `--backend` option or by-name selection.
+- **Physical (user):** record the other two rip styles (speed-rip → `SPEED_RIPPED`,
+  fan/hitless → `NO_HIT`); a **fixed phone mount** (static background for the
+  boundary detector); eventually the dedicated tripod camera.
+- **Infra:** set-bundling CI (build latest set → publish bundle as a release
+  asset) + `fetch-set <code>`; coverage badge once pytest-cov is in CI.
+- **Optional:** nicer cv2 operator-window font (Pillow/TrueType) — low priority,
+  Phase 2 supersedes it for the viewer-facing surface.
+
+### Cross-cutting note
 - **Latency:** overlay trails the real card by recognition latency + dwell
   (~0.5-0.8s). Fine for held cards; a card flashed faster than a dwell window
   won't log — same trade-off as offline.
