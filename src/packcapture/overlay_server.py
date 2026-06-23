@@ -44,6 +44,17 @@ def _bgr_to_hex(bgr) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
+def _demo_state() -> OverlayState:
+    """A sample card for confirming the overlay renders/positions in OBS without
+    a live feed (the 'Send test card' button)."""
+    return OverlayState(
+        set_name="Phantasmal Flames", card_name="Mega Lopunny ex", card_number="128",
+        price=19.10, variant="holofoil", rarity="Ultra Rare", is_hit=True,
+        last_log_frame=0, total=19.10, count=1, packs=0,
+        by_status={"complete": 0, "speed_ripped": 0, "no_hit": 0},
+    )
+
+
 def state_to_payload(st: OverlayState) -> dict:
     """Serialize the overlay state for the browser (formatted + colors resolved)."""
     return {
@@ -396,7 +407,8 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
   <button id="detect" title="Detect cameras">↻ cameras</button>
   <button class="go" id="start">Start</button>
   <button class="stop" id="stop" disabled>Stop</button>
-  <span class="hint">overlay for OBS: <a href="/overlay" target="_blank">/overlay</a></span>
+  <span class="hint">OBS overlay: <a href="/overlay" target="_blank">/overlay</a>
+    <button id="demo" title="Push a sample card to the overlay for OBS setup">Test card</button></span>
 </header>
 <main>
   <div class="err" id="err"></div>
@@ -443,6 +455,7 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
       .then(r=>r.json()).then(function(res){ if(!res.ok) el("err").textContent = res.message; });
   };
   el("stop").onclick = function(){ fetch("/api/stop", { method:"POST" }); };
+  el("demo").onclick = function(){ fetch("/api/demo", { method:"POST" }); };
   function statusCounts(bs){ return ["COMPLETE "+(bs.complete||0), "SPEED "+(bs.speed_ripped||0), "NOHIT "+(bs.no_hit||0)].join("   "); }
   function poll(){
     fetch("/api/state").then(r=>r.json()).then(function(s){
@@ -551,6 +564,11 @@ class OverlayServer:
                 elif self.path == "/api/stop":
                     ok, msg = ctl.stop()
                     self._json({"ok": ok, "message": msg})
+                elif self.path == "/api/demo":
+                    # Push a sample card to the overlay for OBS setup (no-op once a
+                    # real session starts publishing over it).
+                    server.publish(_demo_state())
+                    self._json({"ok": True, "message": "demo card sent"})
                 else:
                     self.send_error(404)
 

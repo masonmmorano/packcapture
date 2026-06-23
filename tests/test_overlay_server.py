@@ -146,6 +146,17 @@ def test_operator_state_idle_shape():
     assert s["totals"]["cards"] == 0
 
 
+def test_demo_endpoint_publishes_to_overlay():
+    server = _control_server()
+    try:
+        assert _post(server, "/api/demo")["ok"] is True
+        _, payload = server._latest()
+        assert payload["card_name"] == "Mega Lopunny ex"
+        assert payload["is_hit"] is True
+    finally:
+        server.stop()
+
+
 def test_card_row_has_rarity_color_and_hit_flag():
     from types import SimpleNamespace
     from packcapture.overlay_server import _card_row
