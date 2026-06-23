@@ -65,6 +65,16 @@ def cmd_fetch_prices(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fetch_meta(args: argparse.Namespace) -> int:
+    from .setbuild.builder import backfill_supertypes
+
+    summary = backfill_supertypes(args.code)
+    print(f"Backfilled supertypes for '{args.code}':")
+    print(f"  cards:          {summary['cards']}")
+    print(f"  with supertype: {summary['with_supertype']}")
+    return 0
+
+
 def cmd_overlay(args: argparse.Namespace) -> int:
     from .overlay import run
 
@@ -72,7 +82,7 @@ def cmd_overlay(args: argparse.Namespace) -> int:
     return run(
         source, args.set, save=args.save, export=args.export,
         stable_frames=args.stable_frames, min_inliers=args.min_inliers,
-        facecam_frac=args.facecam_frac,
+        facecam_frac=args.facecam_frac, reset_layout=args.reset_layout,
     )
 
 
@@ -130,6 +140,11 @@ def build_parser() -> argparse.ArgumentParser:
     fp.add_argument("code", help="Set code of a built bundle, e.g. me2")
     fp.set_defaults(func=cmd_fetch_prices)
 
+    fm = sub.add_parser("fetch-meta",
+                        help="Backfill static card metadata (supertype) onto a built bundle")
+    fm.add_argument("code", help="Set code of a built bundle, e.g. me2")
+    fm.set_defaults(func=cmd_fetch_meta)
+
     o = sub.add_parser("overlay", help="Rip-mode price overlay on clean footage (ticker + total)")
     o.add_argument("source", help="Webcam/OBS device index (e.g. 0) or a video file path")
     o.add_argument("--set", required=True, help="Set code of a built bundle")
@@ -141,6 +156,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Confidence-gate inlier floor (lower for low-res footage)")
     o.add_argument("--facecam-frac", type=float, default=0.30,
                    help="Facecam height as a fraction of frame height; the price block sits below it")
+    o.add_argument("--reset-layout", action="store_true",
+                   help="Ignore the saved panel layout and start from default positions")
     o.set_defaults(func=cmd_overlay)
 
     s = sub.add_parser("list-sets", help="List locally built bundles")

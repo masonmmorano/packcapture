@@ -47,6 +47,18 @@ RARITY_COMMON = "common"
 RARITY_UNCOMMON = "uncommon"
 RARITY_RARE_PLUS = "rare_plus"
 
+# Supertypes that are filler, never one of the 10 tracked cards. The inserted
+# basic energy that ships in every pack false-matches a set's own energy card
+# (e.g. me2's Ignition Energy), so it must be dropped before the count — it is
+# not a pull. (A genuinely pulled special energy is also dropped; that is an
+# accepted trade for never miscounting the per-pack energy as an 11th card.)
+EXCLUDED_SUPERTYPES = frozenset({"energy"})
+
+
+def is_tracked_supertype(supertype: str) -> bool:
+    """False for cards that must never be logged toward a pack (energy filler)."""
+    return (supertype or "").strip().lower() not in EXCLUDED_SUPERTYPES
+
 
 def rarity_class(rarity: str) -> str:
     """Bucket a pokemontcg.io rarity string into common / uncommon / rare_plus."""

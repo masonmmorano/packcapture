@@ -26,7 +26,7 @@ from .mediautil import to_h264
 from .pipeline.boundary import DETECTING_PACK, PACK_END, PACK_START, BoundaryConfig, BoundaryDetector
 from .pipeline.confidence import ConfidenceGate, GateConfig
 from .pipeline.roi import BoxSmoother, MotionFeatureROI
-from .pipeline.session import Session, rarity_class
+from .pipeline.session import Session, is_tracked_supertype, rarity_class
 from .recognize.orb_matcher import Matcher
 from .storage.bundle import load_bundle
 
@@ -131,7 +131,17 @@ def run(
                     # logging gate, so fast-fanned cards still count as "a card
                     # is in play" even when not confidently identified.
                     card_seen = r.inliers >= evidence_inliers
-                    if decision.accepted:
+                    if decision.accepted and not is_tracked_supertype(r.supertype):
+                        # Inserted basic energy false-matches the set's energy
+                        # card: present, but never logged toward the pack.
+                        live = f"{r.name} #{r.number}  i{r.inliers}  energy/skip"
+                        live_color = (90, 160, 230)
+                        if r.card_id != cur_id:
+                            log.appendleft((
+                                f"~ {r.name} #{r.number}  energy (excluded)", (150, 150, 150),
+                            ))
+                        cur_id, cur_n = r.card_id, 0
+                    elif decision.accepted:
                         live = f"{r.name} #{r.number}  i{r.inliers}  ACCEPT"
                         live_color = (90, 220, 90)
                         cur_n = cur_n + 1 if r.card_id == cur_id else 1

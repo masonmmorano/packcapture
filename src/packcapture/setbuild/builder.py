@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any
+import sqlite3
+from typing import Any, Optional
 
 import cv2
 import numpy as np
@@ -67,6 +68,7 @@ def build_set(
             "number": card.get("number", "") or "",
             "name": card.get("name", "") or "",
             "rarity": card.get("rarity", "") or "",
+            "supertype": card.get("supertype", "") or "",
             "set_code": code,
             "image_url": url or "",
         }
@@ -106,3 +108,46 @@ def build_set(
     }
     save_bundle(code, rows, descriptors, keypoints, manifest)
     return manifest, paths
+
+
+def backfill_supertypes(
+    code: str, client: Optional[PokemonTCGClient] = None
+) -> dict[str, int]:
+    """Add/refresh the static ``supertype`` column on an existing bundle.
+
+    ``supertype`` (Pokémon / Trainer / Energy) is needed to exclude the inserted
+    basic energy from the tracked count — it false-matches a set's own energy
+    card. Bundles built before this column existed can be patched in place from
+    the lightweight card metadata (no images), so the CDN being blocked is fine.
+    """
+    code = code.lower()
+    paths = bundle_paths(code)
+    if not paths["metadata"].exists():
+        raise FileNotFoundError(
+            f"No bundle for set '{code}' at {paths['dir']}. "
+            f"Build it first with: packcapture build-set {code}"
+        )
+
+    client = client or PokemonTCGClient()
+    cards = client.get_cards(code)
+
+    conn = sqlite3.connect(str(paths["metadata"]))
+    try:
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(cards)")}
+        if "supertype" not in existing:
+            conn.execute("ALTER TABLE cards ADD COLUMN supertype TEXT")
+        n = 0
+        for card in cards:
+            supertype = card.get("supertype") or ""
+            conn.execute(
+                "UPDATE cards SET supertype = ? WHERE card_id = ?",
+                (supertype, card["id"]),
+            )
+            if supertype:
+                n += 1
+        conn.commit()
+        total = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
+    finally:
+        conn.close()
+
+    return {"cards": total, "with_supertype": n}

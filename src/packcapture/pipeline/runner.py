@@ -24,7 +24,7 @@ import numpy as np
 
 from ..recognize.orb_matcher import Matcher
 from .confidence import ConfidenceGate, GateDecision
-from .session import LoggedCard, Session
+from .session import LoggedCard, Session, is_tracked_supertype
 from .settle import SettleDetector
 
 # ROI as (x, y, w, h), matching cv2.selectROI's output.
@@ -72,6 +72,11 @@ def run_stream(
             events.append(PipelineEvent("excluded", decision))
             continue
         r = decision.result
+        # Energy filler (the inserted basic energy false-matches the set's own
+        # energy card) is recognized but never counted toward the pack.
+        if not is_tracked_supertype(r.supertype):
+            events.append(PipelineEvent("excluded", decision))
+            continue
         card = session.add(
             card_id=r.card_id,
             name=r.name,

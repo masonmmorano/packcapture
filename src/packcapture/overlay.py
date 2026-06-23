@@ -29,11 +29,12 @@ import cv2
 import numpy as np
 
 from .capture.source import FrameSource
+from .config import set_dir
 from .mediautil import to_h264
 from .pipeline.boundary import PACK_END, BoundaryConfig, BoundaryDetector
 from .pipeline.confidence import ConfidenceGate, GateConfig
 from .pipeline.roi import BoxSmoother, MotionFeatureROI
-from .pipeline.session import RARITY_RARE_PLUS, Session, rarity_class
+from .pipeline.session import RARITY_RARE_PLUS, Session, is_tracked_supertype, rarity_class
 from .recognize.orb_matcher import Matcher
 from .storage.bundle import load_bundle
 
@@ -45,8 +46,35 @@ PRICE = (90, 220, 120)      # green dollar figure
 GOLD = (60, 200, 250)       # rare+ "hit" highlight
 ACCENT = (60, 180, 250)     # amber accent bar (set badge)
 PANEL = (18, 18, 18)
+# Red -> orange accent-stripe gradient (BGR), top to bottom.
+GRAD_TOP = (45, 45, 235)    # red
+GRAD_BOT = (50, 150, 255)   # orange
+
+# Per-tier rarity colors (BGR), grey commons -> gold chase cards.
+_RARITY_COLORS = {
+    "common": (165, 165, 165),
+    "uncommon": (170, 190, 150),
+    "rare": (220, 190, 120),
+    "double rare": (235, 180, 80),
+    "ultra rare": (215, 130, 215),
+    "illustration rare": (205, 210, 90),
+    "special illustration rare": (60, 200, 250),
+    "mega hyper rare": (190, 90, 235),
+}
+
+
+def _rarity_color(rarity: str):
+    return _RARITY_COLORS.get((rarity or "").strip().lower(), INK)
 
 TICKER_ANIM_S = 0.40        # seconds for a new card to slide up into place
+HIT_PRICE = 1.50            # a rare+ only earns the gold HIT tag above this raw price
+
+# Session slot-variant -> ticker display text.
+_VARIANT_LABELS = {"reverse": "reverse holo", "normal": "normal", "unknown": ""}
+
+
+def _variant_label(variant: str) -> str:
+    return _VARIANT_LABELS.get(variant, variant or "")
 
 
 @dataclass
@@ -57,6 +85,7 @@ class OverlayState:
     card_number: str = ""
     price: Optional[float] = None
     variant: str = ""
+    rarity: str = ""
     is_hit: bool = False
     last_log_frame: int = -1            # frame the current card was logged (drives the slide)
     # Pack analytics.
@@ -90,47 +119,113 @@ def _clamp01(v: float) -> float:
     return 0.0 if v < 0 else 1.0 if v > 1 else v
 
 
+def _gradient_rect(img, x, y, w, h, top_color, bottom_color):
+    """Fill a rectangle with a vertical top->bottom color gradient (in place)."""
+    x2, y2 = min(x + w, img.shape[1]), min(y + h, img.shape[0])
+    x, y = max(x, 0), max(y, 0)
+    if x2 <= x or y2 <= y:
+        return
+    ramp = np.linspace(0.0, 1.0, y2 - y, dtype=np.float32)[:, None]
+    top = np.array(top_color, np.float32)
+    bot = np.array(bottom_color, np.float32)
+    col = (top * (1 - ramp) + bot * ramp).astype(np.uint8)   # (h, 3)
+    img[y:y2, x:x2] = col[:, None, :]
+
+
+def _ticker_geom(W, H, facecam_frac, origin):
+    """Resting box of the price ticker -> (x, y, bw, bh, scale).
+
+    `origin` overrides the auto top-left (used when the user has dragged it).
+    """
+    s = H / 720.0
+    bw = int(W * 0.32)
+    # Height must enclose the four lines laid out in _render_ticker:
+    # name (pad+26) -> rarity (+24) -> sub (+22) -> price (+46) -> bottom pad.
+    bh = int(160 * s)
+    margin = int(16 * s)
+    if origin is not None:
+        x, y = int(origin[0]), int(origin[1])
+    else:
+        x = W - bw - margin
+        y = int(H * facecam_frac) + int(10 * s)
+    return x, y, bw, bh, s
+
+
+def _analytics_geom(W, H, origin):
+    """Box of the pack-analytics panel -> (x, y, bw, bh, scale)."""
+    s = H / 720.0
+    bw = int(W * 0.30)
+    bh = int(228 * s)   # encloses title/set/value/counts/status/last-pack; keep in sync
+    margin = int(16 * s)
+    if origin is not None:
+        x, y = int(origin[0]), int(origin[1])
+    else:
+        x = W - bw - margin
+        y = H - bh - margin
+    return x, y, bw, bh, s
+
+
 def _render_ticker(img, x, y, bw, bh, st, s):
     """Draw the price ticker panel at top-left (x, y)."""
-    accent = GOLD if st.is_hit else ACCENT
     price_color = GOLD if st.is_hit else PRICE
-    pad = int(18 * s)
+    pad = int(16 * s)
 
     _blend_rect(img, x, y, bw, bh, PANEL, 0.82)
     cv2.rectangle(img, (x, y), (x + bw, y + bh), (70, 70, 70), max(1, int(s)))
-    cv2.rectangle(img, (x, y), (x + int(6 * s), y + bh), accent, -1)  # accent stripe
+    _gradient_rect(img, x, y, int(6 * s), bh, GRAD_TOP, GRAD_BOT)  # red->orange accent stripe
 
-    cx = x + pad + int(6 * s)
-    cy = y + pad + int(22 * s)
+    cx = x + pad + int(10 * s)
 
-    _put(img, (st.card_name or "scanning…")[:24], (cx, cy), 0.62 * s, INK, max(1, int(1.6 * s)))
+    # HIT chip (top-right), measured so the name can be clipped clear of it.
+    name_limit = x + bw - pad
     if st.is_hit:
-        tag = "HIT"
-        (tw, _), _ = cv2.getTextSize(tag, FONT, 0.45 * s, max(1, int(1.4 * s)))
-        _blend_rect(img, x + bw - pad - tw - int(10 * s), y + pad - int(4 * s),
-                    tw + int(12 * s), int(22 * s), GOLD, 0.9)
-        _put(img, tag, (x + bw - pad - tw - int(4 * s), y + pad + int(13 * s)),
-             0.45 * s, (20, 20, 20), max(1, int(1.4 * s)))
+        tag, ts, tt = "HIT", 0.5 * s, max(1, int(1.5 * s))
+        (tw, th), _ = cv2.getTextSize(tag, FONT, ts, tt)
+        chip_w, chip_h = tw + int(16 * s), th + int(12 * s)
+        chip_x, chip_y = x + bw - pad - chip_w, y + pad
+        _blend_rect(img, chip_x, chip_y, chip_w, chip_h, GOLD, 0.95)
+        _put(img, tag, (chip_x + int(8 * s), chip_y + th + int(6 * s)), ts, (20, 20, 20), tt)
+        name_limit = chip_x - int(10 * s)
+
+    # Line 1: card name, clipped to the space left of the HIT chip.
+    y_name = y + pad + int(26 * s)
+    name = st.card_name or "scanning…"
+    name_scale, name_thick = 0.64 * s, max(1, int(1.6 * s))
+    while name and cv2.getTextSize(name, FONT, name_scale, name_thick)[0][0] > name_limit - cx:
+        name = name[:-1]
+    _put(img, name, (cx, y_name), name_scale, INK, name_thick)
+
+    # Line 2: rarity, color-coded by tier.
+    y_rar = y_name + int(24 * s)
+    if st.rarity:
+        _put(img, st.rarity, (cx, y_rar), 0.5 * s, _rarity_color(st.rarity), max(1, int(1.2 * s)))
+
+    # Line 3: number · variant.
+    y_sub = y_rar + int(22 * s)
     if st.card_number:
-        _put(img, f"#{st.card_number}  {st.variant}", (cx, cy + int(20 * s)), 0.5 * s, MUTED)
+        sub = f"#{st.card_number}" + (f"   {st.variant}" if st.variant else "")
+        _put(img, sub, (cx, y_sub), 0.44 * s, MUTED, max(1, int(s)))
 
-    py = cy + int(46 * s)
-    _put(img, _money(st.price), (cx, py), 1.15 * s, price_color, max(2, int(2.4 * s)))
-    _put(img, "RAW", (cx + int(2 * s), py + int(18 * s)), 0.4 * s, MUTED)
+    # Line 4: price (big) with a small RAW label trailing it.
+    y_price = y_sub + int(46 * s)
+    price_txt = _money(st.price)
+    price_scale, price_thick = 1.05 * s, max(2, int(2.3 * s))
+    _put(img, price_txt, (cx, y_price), price_scale, price_color, price_thick)
+    (pw, _), _ = cv2.getTextSize(price_txt, FONT, price_scale, price_thick)
+    _put(img, "RAW", (cx + pw + int(12 * s), y_price), 0.42 * s, MUTED, max(1, int(s)))
 
 
-def draw_price_ticker(img, st, frame_idx, fps, facecam_h_frac=0.30):
-    """Blend the (animated) price ticker into `img` in place."""
+def draw_price_ticker(img, st, frame_idx, fps, facecam_h_frac=0.30, origin=None):
+    """Blend the (animated) price ticker into `img` in place.
+
+    `origin` (top-left x, y) overrides the auto position when the user has
+    dragged the panel; otherwise it sits top-right under the facecam.
+    """
     if not st.card_name:
         return
     H, W = img.shape[:2]
-    s = H / 720.0
-    pad = int(18 * s)
-    bw = int(W * 0.32)
-    bh = pad + int(34 * s) + int(46 * s) + int(20 * s) + pad
-    margin = int(16 * s)
-    x = W - bw - margin
-    y_rest = int(H * facecam_h_frac) + int(10 * s)
+    x, y_rest, bw, bh, s = _ticker_geom(W, H, facecam_h_frac, origin)
+    x = max(x, 0)
 
     # Slide-up + fade-in for each newly logged card.
     dur = max(1.0, fps * TICKER_ANIM_S)
@@ -147,32 +242,29 @@ def draw_price_ticker(img, st, frame_idx, fps, facecam_h_frac=0.30):
     cv2.addWeighted(reg_layer, eased, reg_img, 1 - eased, 0, reg_img)
 
 
-def draw_analytics(img, st):
-    """Blend the fixed pack-analytics panel into the bottom-right of `img`."""
+def draw_analytics(img, st, origin=None):
+    """Blend the pack-analytics panel into `img` (bottom-right, or `origin`)."""
     H, W = img.shape[:2]
-    s = H / 720.0
+    x, y, bw, bh, s = _analytics_geom(W, H, origin)
     pad = int(16 * s)
-    bw = int(W * 0.30)
-    bh = int(196 * s)
-    margin = int(16 * s)
-    x = W - bw - margin
-    y = H - bh - margin
 
     _blend_rect(img, x, y, bw, bh, PANEL, 0.82)
     cv2.rectangle(img, (x, y), (x + bw, y + bh), (70, 70, 70), max(1, int(s)))
-    cx = x + pad
-    _put(img, "PACK ANALYTICS", (cx, y + pad + int(16 * s)), 0.52 * s, INK, max(1, int(1.4 * s)))
-    _put(img, st.set_name.upper()[:24], (cx, y + pad + int(36 * s)), 0.42 * s, MUTED)
+    _gradient_rect(img, x, y, int(6 * s), bh, GRAD_TOP, GRAD_BOT)  # red->orange stripe (matches ticker)
+    cx = x + pad + int(10 * s)
+    _put(img, "PACK ANALYTICS", (cx, y + pad + int(20 * s)), 0.52 * s, INK, max(1, int(1.4 * s)))
+    _put(img, st.set_name.upper()[:24], (cx, y + pad + int(40 * s)), 0.42 * s, MUTED)
 
-    # Big session value.
-    vy = y + pad + int(78 * s)
-    _put(img, "SESSION VALUE", (cx, vy - int(20 * s)), 0.42 * s, MUTED)
+    # Big session value — label sits well clear above the tall figure.
+    _put(img, "SESSION VALUE", (cx, y + pad + int(66 * s)), 0.42 * s, MUTED)
+    vy = y + pad + int(102 * s)
     _put(img, _money(st.total), (cx, vy), 1.0 * s, PRICE, max(2, int(2 * s)))
 
-    cv2.line(img, (cx, vy + int(14 * s)), (x + bw - pad, vy + int(14 * s)), (70, 70, 70), max(1, int(s)))
+    ly = vy + int(16 * s)
+    cv2.line(img, (cx, ly), (x + bw - pad, ly), (70, 70, 70), max(1, int(s)))
 
     # Counts row.
-    ry = vy + int(40 * s)
+    ry = ly + int(28 * s)
     _put(img, f"{st.packs} packs", (cx, ry), 0.5 * s, INK, max(1, int(1.3 * s)))
     _put(img, f"{st.count} cards", (cx + int(bw * 0.42), ry), 0.5 * s, INK, max(1, int(1.3 * s)))
 
@@ -191,15 +283,91 @@ def draw_analytics(img, st):
         px += tw + int(16 * s)
 
     if st.last_pack_label:
-        _put(img, st.last_pack_label[:32], (cx, sy + int(24 * s)), 0.42 * s, MUTED)
+        _put(img, st.last_pack_label[:32], (cx, sy + int(26 * s)), 0.42 * s, MUTED)
 
 
-def draw_overlay(frame, st, frame_idx=0, fps=30.0, facecam_h_frac=0.30):
+def draw_overlay(frame, st, frame_idx=0, fps=30.0, facecam_h_frac=0.30,
+                 ticker_origin=None, analytics_origin=None):
     """Draw both overlays onto a copy of `frame` and return it (used in tests/probes)."""
     out = frame.copy()
-    draw_price_ticker(out, st, frame_idx, fps, facecam_h_frac)
-    draw_analytics(out, st)
+    draw_price_ticker(out, st, frame_idx, fps, facecam_h_frac, origin=ticker_origin)
+    draw_analytics(out, st, origin=analytics_origin)
     return out
+
+
+class LayoutDrag:
+    """Mouse-drag controller for positioning the two overlay panels (live mode).
+
+    Holds the current top-left origins of the ticker and analytics panels and
+    relocates whichever one is grabbed. Origins are clamped inside the frame.
+    Set ``dirty`` when the user has moved something (so the layout is saved).
+    """
+
+    def __init__(self, ticker_origin=None, analytics_origin=None, facecam_frac=0.30):
+        self.ticker = list(ticker_origin) if ticker_origin else None
+        self.analytics = list(analytics_origin) if analytics_origin else None
+        self.facecam = facecam_frac
+        self.W = self.H = 0
+        self._drag = None  # (panel_name, grab_dx, grab_dy)
+        self.dirty = False
+
+    def ensure(self, W, H):
+        """Fill in default origins once the frame size is known."""
+        self.W, self.H = W, H
+        if self.ticker is None:
+            x, y, _, _, _ = _ticker_geom(W, H, self.facecam, None)
+            self.ticker = [x, y]
+        if self.analytics is None:
+            x, y, _, _, _ = _analytics_geom(W, H, None)
+            self.analytics = [x, y]
+
+    def _boxes(self):
+        t = _ticker_geom(self.W, self.H, self.facecam, tuple(self.ticker))
+        a = _analytics_geom(self.W, self.H, tuple(self.analytics))
+        return t, a  # each (x, y, bw, bh, s)
+
+    def on_mouse(self, event, x, y, flags, param):
+        (tx, ty, tw, th, _), (ax, ay, aw, ah, _) = self._boxes()
+        if event == cv2.EVENT_LBUTTONDOWN:
+            if ax <= x <= ax + aw and ay <= y <= ay + ah:
+                self._drag = ("analytics", x - ax, y - ay)
+            elif tx <= x <= tx + tw and ty <= y <= ty + th:
+                self._drag = ("ticker", x - tx, y - ty)
+        elif event == cv2.EVENT_MOUSEMOVE and self._drag is not None:
+            name, gdx, gdy = self._drag
+            origin = self.ticker if name == "ticker" else self.analytics
+            bw, bh = (tw, th) if name == "ticker" else (aw, ah)
+            origin[0] = max(0, min(x - gdx, self.W - bw))
+            origin[1] = max(0, min(y - gdy, self.H - bh))
+            self.dirty = True
+        elif event == cv2.EVENT_LBUTTONUP:
+            self._drag = None
+
+
+def _layout_path(code):
+    return set_dir(code) / "overlay_layout.json"
+
+
+def load_layout(code):
+    """Return (ticker_origin, analytics_origin) from disk, or (None, None)."""
+    p = _layout_path(code)
+    if p.exists():
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+            return d.get("ticker"), d.get("analytics")
+        except (ValueError, OSError):
+            pass
+    return None, None
+
+
+def save_layout(code, ticker_origin, analytics_origin):
+    p = _layout_path(code)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        json.dumps({"ticker": list(ticker_origin), "analytics": list(analytics_origin)}, indent=2),
+        encoding="utf-8",
+    )
+    return p
 
 
 def run(
@@ -212,6 +380,7 @@ def run(
     top: int = 5,
     evidence_inliers: int = 15,
     facecam_frac: float = 0.30,
+    reset_layout: bool = False,
 ) -> int:
     bundle = load_bundle(set_code)
     matcher = Matcher(bundle)
@@ -237,6 +406,17 @@ def run(
     fps = 30.0
     boundary: Optional[BoundaryDetector] = None
 
+    # Overlay positions: saved per-set layout drives both live and headless renders.
+    # In live mode the two panels are mouse-draggable and the new layout is saved.
+    ticker_origin, analytics_origin = (None, None) if reset_layout else load_layout(set_code)
+    drag = LayoutDrag(ticker_origin, analytics_origin, facecam_frac) if show else None
+    win = "packcapture overlay"
+    if show:
+        cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+        cv2.setMouseCallback(win, drag.on_mouse)
+        print("live overlay: drag either panel to reposition; 's' saves the layout, "
+              "'r' resets it, 'q'/Esc quits.")
+
     with FrameSource(source).open() as src:
         fps = src.fps or 30.0
         for frame in src.frames():
@@ -254,19 +434,30 @@ def run(
                 if res:
                     r = res[0]
                     card_seen = r.inliers >= evidence_inliers
-                    if decision.accepted:
+                    # The inserted basic energy false-matches the set's energy
+                    # card; it's a real card in frame (keeps card_seen) but is
+                    # never logged or priced as a pull.
+                    if decision.accepted and not is_tracked_supertype(r.supertype):
+                        cur_id, cur_n = None, 0
+                    elif decision.accepted:
                         cur_n = cur_n + 1 if r.card_id == cur_id else 1
                         cur_id = r.card_id
                         if cur_n == stable_frames and r.card_id != last_logged:
                             last_logged = r.card_id
-                            session.add(
+                            card = session.add(
                                 card_id=r.card_id, name=r.name, number=r.number,
                                 base_rarity=r.rarity, inliers=r.inliers,
                             )
-                            price, variant = price_map.get(r.card_id, (None, ""))
+                            price, _ = price_map.get(r.card_id, (None, ""))
                             st.card_name, st.card_number = r.name, r.number
-                            st.price, st.variant = price, variant
-                            st.is_hit = rarity_class(r.rarity) == RARITY_RARE_PLUS
+                            st.price = price
+                            st.rarity = r.rarity
+                            # Show the slot variant (reverse-holo by position), not
+                            # the printing the price came from.
+                            st.variant = _variant_label(card.variant)
+                            # A "hit" is a rare+ that's also actually worth something.
+                            st.is_hit = (rarity_class(r.rarity) == RARITY_RARE_PLUS
+                                         and price is not None and price > HIT_PRICE)
                             st.last_log_frame = frame_no
                             st.count += 1
                             if price is not None:
@@ -285,12 +476,27 @@ def run(
             st.packs = len(session.packs)
             st.by_status = session.stats()["by_status"]
 
-            canvas = draw_overlay(frame, st, frame_idx=frame_no, fps=fps, facecam_h_frac=facecam_frac)
+            if show:
+                drag.ensure(frame.shape[1], frame.shape[0])
+            canvas = draw_overlay(
+                frame, st, frame_idx=frame_no, fps=fps, facecam_h_frac=facecam_frac,
+                ticker_origin=drag.ticker if show else ticker_origin,
+                analytics_origin=drag.analytics if show else analytics_origin,
+            )
 
             if show:
-                cv2.imshow("packcapture overlay", canvas)
-                if (cv2.waitKey(1) & 0xFF) in (27, ord("q")):
+                cv2.imshow(win, canvas)
+                key = cv2.waitKey(1) & 0xFF
+                if key in (27, ord("q")):
                     break
+                if key == ord("s"):
+                    path = save_layout(set_code, drag.ticker, drag.analytics)
+                    drag.dirty = False
+                    print(f"saved overlay layout: {path}")
+                elif key == ord("r"):
+                    drag.ticker = drag.analytics = None
+                    drag.ensure(frame.shape[1], frame.shape[0])
+                    drag.dirty = True
             else:
                 if writer is None:
                     writer = cv2.VideoWriter(
@@ -303,6 +509,9 @@ def run(
         writer.release()
         to_h264(save)
     if show:
+        if drag is not None and drag.dirty:
+            path = save_layout(set_code, drag.ticker, drag.analytics)
+            print(f"saved overlay layout: {path}")
         cv2.destroyAllWindows()
 
     session.finalize()

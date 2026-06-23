@@ -26,6 +26,7 @@ class MatchResult:
     good: int          # Lowe-ratio good matches
     inliers: int       # RANSAC homography inliers (== good if not refined)
     score: float       # ranking score (inliers)
+    supertype: str = ""  # Pokémon / Trainer / Energy ("" if the bundle predates the column)
 
 
 class Matcher:
@@ -99,6 +100,7 @@ class Matcher:
                     good=good_count,
                     inliers=inliers,
                     score=float(inliers),
+                    supertype=row.get("supertype", "") or "",
                 )
             )
 
