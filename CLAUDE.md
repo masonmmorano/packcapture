@@ -6,17 +6,23 @@
 ## Session log & how to resume
 
 > **⚠️ START HERE — first real tripod footage has LANDED and validated
-> (2026-06-23).** The long-standing blocker is cleared: `IMG_7032.MOV` (3 real
-> me2 packs, fixed tripod, native res) was transcoded to
-> `scratch/footage/IMG_7032_fixed.mp4` and run through the overlay pipeline —
-> **all 3 packs closed `COMPLETE`** with correct reverse-holo slot labels (this
-> drove the energy-exclusion fix; see the 2026-06-23 block below).
+> (2026-06-23).** The long-standing blocker is cleared: `scratch/footage/IMG_7032.MOV`
+> (3 real me2 packs, fixed tripod, native res) run through `packcapture overlay`
+> gave **all 3 packs `COMPLETE`** (30 cards, $8.08) with correct reverse-holo slot
+> labels — validated render at `scratch/footage/IMG_7032_overlay_raw.mp4` (render
+> from the raw `.MOV`, never the burned-in `_fixed` file; see gotchas). This drove
+> the energy-exclusion fix (see the 2026-06-23 block below).
 >
-> Remaining physical to-do (still off-keyboard, lower priority now): record the
-> other two ripping styles for label coverage — **speed-rip straight to the hit**
-> (`SPEED_RIPPED`) and **quick fan / hitless** (`NO_HIT`). The `COMPLETE` path is
-> now validated on real footage; these two would validate the other status
-> labels. (Also in memory: `physical-todo-real-pack-footage`.)
+> Remaining physical to-do (off-keyboard):
+> 1. **Live-capture validation (newly unblocked).** The live threaded overlay is
+>    built (`overlay … --threaded`) but unproven on a real feed. Pre-tripod, use a
+>    **phone as a webcam** (Iriun/DroidCam/Camo → phone shows up as a device; or
+>    into OBS → Virtual Cam), `packcapture list-cameras` for the index, then run it.
+>    Needs a fixed phone mount (static background for the boundary detector).
+> 2. **Record the other two ripping styles** for label coverage — speed-rip → hit
+>    (`SPEED_RIPPED`) and fan/hitless (`NO_HIT`); the `COMPLETE` path is done.
+>
+> (Also in memory: `physical-todo-real-pack-footage`, `live-capture-obs-plan`.)
 
 **Repo:** https://github.com/masonmmorano/packcapture (public). Local:
 `C:\Users\Mason\Documents\repositories\packcapture`.
@@ -521,24 +527,39 @@ hypeoverlay competitor (Phase 2). Same recognition core feeds both.
   frame, with resolution/fps — to find the OBS Virtual Cam index. A failed-open
   index is often one OBS already holds (informative).
 
-### Phase 0 — still to wire (next, needs the live cam in hand to tune)
-- **Extract the recognition step** out of `overlay.run`'s for-loop body
-  (`overlay.py:422-485`) into a reusable `recognize_step(frame, ctx) -> OverlayState`
-  so the offline `--save` path stays serial through the *same* code while a new
-  live path drives it from `RecognitionWorker`. Display loop = main thread, 30-60
-  fps, blits the latest frame + `draw_overlay(state)`, never waits on recognition.
-- **Dwell must become time-based.** `cur_n == stable_frames` (overlay.py:445)
-  assumes per-video-frame; at ~3 recog/sec that's a 1.6s dwell. Switch to "stable
-  for ~0.4-0.6s" on recognition ticks.
-- **BoundaryDetector fps** → feed it the *recognition* rate (~3), not video fps
-  (it's already `BoundaryConfig(fps=...)`-parameterized; one-line cadence change).
+### Phase 0 — recognition wired to the threaded core (DONE 2026-06-23)
+- **`OverlayEngine`** (in `overlay.py`): the per-frame recognition + overlay-state
+  update, extracted from `overlay.run`'s loop body. `process(frame, clock)`
+  recognizes one frame and folds the result into a lock-guarded `OverlayState`;
+  `snapshot()` returns a copy for a display thread to draw. Both the serial path
+  and the live path drive the *same* engine, so the offline `--save` render is
+  unchanged (verified: serial render still runs end-to-end; `last_log_frame` and
+  the draw `frame_idx` share one **clock**, so the ticker slide is identical).
+- **`run_live_threaded` + `packcapture overlay <src> --set me2 --threaded`:**
+  `ThreadedFrameSource` + `RecognitionWorker` run capture/recognition in the
+  background; the main thread blits the freshest frame + `engine.snapshot()` at
+  display rate, so video stays smooth despite ~300 ms recognitions. Panels stay
+  draggable; `--save` is rejected in `--threaded` (headless render stays serial).
+- **Boundary cadence** uses the recognition rate, not video fps: the engine ticks
+  the BoundaryDetector once per recognition, so `boundary_fps=LIVE_RECOG_FPS`
+  (`3.0`, a constant in `overlay.py`). **Dwell** is a couple of recognition ticks
+  in live mode (`--stable-frames` default 2 threaded / 5 serial) rather than
+  several video frames. `tests/test_overlay.py` covers the engine (logs from
+  recognition, clock→last_log_frame, snapshot independence). **52 tests green.**
+
+### Phase 0 — still to tune (needs a live source in hand)
+- **`run_live_threaded` is not yet validated against a live feed** — it's a
+  composition of unit-tested parts (engine + threaded core) but hasn't faced a
+  real camera/window. First live run: a **phone-as-webcam** (Iriun/DroidCam/Camo)
+  or OBS Virtual Cam — see the START HERE physical to-do.
+- **Tune `LIVE_RECOG_FPS` and the dwell** on real live cadence; consider true
+  wall-clock dwell (currently a tick count) if recognition rate proves variable.
 
 ### Phase 1 — operator window, live
-`packcapture overlay <obs-virtual-cam-index> --set me2` already opens the operator
-window; the gap is just the threaded core above + pointing at the right index.
-User (off-keyboard): enable OBS Virtual Camera with the tripod cam as source, then
-`packcapture list-cameras` to get the index. Then validate + tune dwell/boundary
-on real live cadence.
+`packcapture overlay <obs-virtual-cam-index> --set me2 --threaded` is the operator
+window. User (off-keyboard): expose a camera to OpenCV — easiest pre-tripod is a
+**phone webcam app** (the phone becomes a normal device), or OBS Virtual Camera —
+then `packcapture list-cameras` for the index. Then validate + tune.
 
 ### Phase 2 — in-stream overlay (viewer-facing)
 - New `overlay_server.py`: a tiny local HTTP + WebSocket server serving a
@@ -572,7 +593,8 @@ src/packcapture/
   config.py              paths, API endpoints, ORB params
   mediautil.py           to_h264(): re-encode a render in place (shared)
   devmode.py             dev viewer: video + auto-ROI + scrolling log, side by side
-  overlay.py             rip-mode render: animated price ticker + fixed pack-analytics panel
+  overlay.py             rip-mode overlay: OverlayEngine (recognition step) + serial
+                         render (run) + threaded live window (run_live_threaded)
   api/pokemontcg.py      pokemontcg.io v2 client (paginated, retrying)
   setbuild/builder.py    build-set: fetch + precompute + save
   setbuild/prices.py     fetch-prices: raw TCGPlayer prices -> bundle metadata.db columns
@@ -584,7 +606,8 @@ src/packcapture/
   capture/threaded.py    ThreadedFrameSource + RecognitionWorker (real-time core)
   capture/devices.py     enumerate_cameras(): probe indices for `list-cameras`
   storage/bundle.py      load/save the on-disk bundle (price + supertype columns optional)
-tests/                   pytest suite (49 tests; test_threaded.py covers the live core)
+tests/                   pytest suite (52 tests; test_threaded.py + test_overlay.py
+                         OverlayEngine cover the live core)
 ```
 
 ## Dev setup (Windows)

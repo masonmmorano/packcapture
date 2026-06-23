@@ -76,12 +76,24 @@ def cmd_fetch_meta(args: argparse.Namespace) -> int:
 
 
 def cmd_overlay(args: argparse.Namespace) -> int:
-    from .overlay import run
+    from .overlay import run, run_live_threaded
 
     source: object = int(args.source) if str(args.source).isdigit() else args.source
+    if args.threaded:
+        if args.save:
+            print("error: --threaded is for a live window; drop --save for a "
+                  "headless render.", file=sys.stderr)
+            return 1
+        stable = args.stable_frames if args.stable_frames is not None else 2
+        return run_live_threaded(
+            source, args.set, export=args.export, stable_frames=stable,
+            min_inliers=args.min_inliers, facecam_frac=args.facecam_frac,
+            reset_layout=args.reset_layout,
+        )
+    stable = args.stable_frames if args.stable_frames is not None else 5
     return run(
         source, args.set, save=args.save, export=args.export,
-        stable_frames=args.stable_frames, min_inliers=args.min_inliers,
+        stable_frames=stable, min_inliers=args.min_inliers,
         facecam_frac=args.facecam_frac, reset_layout=args.reset_layout,
     )
 
@@ -166,8 +178,12 @@ def build_parser() -> argparse.ArgumentParser:
     o.add_argument("--set", required=True, help="Set code of a built bundle")
     o.add_argument("--save", help="Render to this video file instead of showing a window")
     o.add_argument("--export", help="Write a per-card/per-pack analytics JSON to this path")
-    o.add_argument("--stable-frames", type=int, default=5,
-                   help="Frames an accepted card must persist before it's logged")
+    o.add_argument("--threaded", action="store_true",
+                   help="Live window with recognition on a worker thread (smooth "
+                        "video despite slow recognition); for webcam/OBS sources")
+    o.add_argument("--stable-frames", type=int, default=None,
+                   help="Recognitions an accepted card must persist before it's "
+                        "logged (default 5 serial, 2 threaded/live)")
     o.add_argument("--min-inliers", type=int, default=25,
                    help="Confidence-gate inlier floor (lower for low-res footage)")
     o.add_argument("--facecam-frac", type=float, default=0.30,

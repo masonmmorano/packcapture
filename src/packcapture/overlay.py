@@ -22,13 +22,16 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-from dataclasses import dataclass, field
-from typing import Optional, Union
+import threading
+import time
+from dataclasses import dataclass, field, replace
+from typing import Callable, Optional, Union
 
 import cv2
 import numpy as np
 
 from .capture.source import FrameSource
+from .capture.threaded import RecognitionWorker, ThreadedFrameSource
 from .config import set_dir
 from .mediautil import to_h264
 from .pipeline.boundary import PACK_END, BoundaryConfig, BoundaryDetector
@@ -370,6 +373,110 @@ def save_layout(code, ticker_origin, analytics_origin):
     return p
 
 
+class OverlayEngine:
+    """The per-frame recognition + overlay-state update, independent of the loop.
+
+    Pulled out of ``run`` so the same logic drives both the serial render path
+    (one thread, a frame counter as the clock) and the live threaded path (a
+    recognition worker, a wall-clock tick as the clock). It owns the recognition
+    state and the :class:`OverlayState`; ``process`` mutates them, and
+    ``snapshot`` returns a lock-guarded copy for a display thread to draw.
+
+    ``last_log_frame`` and the ``clock`` passed to ``process`` must come from the
+    same monotonically-increasing units measured at ``boundary_fps``/draw fps, so
+    the ticker slide animation reads the same in either path.
+    """
+
+    def __init__(
+        self,
+        matcher: "Matcher",
+        gate: ConfidenceGate,
+        session: Session,
+        price_map: dict,
+        state: OverlayState,
+        *,
+        boundary_fps: float,
+        top: int = 5,
+        stable_frames: int = 5,
+        evidence_inliers: int = 15,
+    ):
+        self.matcher = matcher
+        self.gate = gate
+        self.session = session
+        self.price_map = price_map
+        self.st = state
+        self.top = top
+        self.stable_frames = stable_frames
+        self.evidence_inliers = evidence_inliers
+        self.roi_detector = MotionFeatureROI()
+        self.smoother = BoxSmoother()
+        self.boundary = BoundaryDetector(BoundaryConfig(fps=boundary_fps))
+        self._cur_id: Optional[str] = None
+        self._cur_n = 0
+        self._last_logged: Optional[str] = None
+        self._lock = threading.Lock()
+
+    def process(self, frame: np.ndarray, clock: int) -> None:
+        """Recognize one frame and fold the result into the overlay state."""
+        st = self.st
+        roi = self.smoother.update(self.roi_detector.detect(frame))
+        motion = self.roi_detector.last_motion
+
+        card_seen = False
+        if roi is not None:
+            x, y, w, h = roi
+            res = self.matcher.match_array(frame[y:y + h, x:x + w], top=self.top)
+            decision = self.gate.evaluate(res)
+            if res:
+                r = res[0]
+                card_seen = r.inliers >= self.evidence_inliers
+                # The inserted basic energy false-matches the set's energy card;
+                # it's a real card in frame (keeps card_seen) but is never logged.
+                if decision.accepted and not is_tracked_supertype(r.supertype):
+                    self._cur_id, self._cur_n = None, 0
+                elif decision.accepted:
+                    self._cur_n = self._cur_n + 1 if r.card_id == self._cur_id else 1
+                    self._cur_id = r.card_id
+                    if self._cur_n == self.stable_frames and r.card_id != self._last_logged:
+                        self._last_logged = r.card_id
+                        card = self.session.add(
+                            card_id=r.card_id, name=r.name, number=r.number,
+                            base_rarity=r.rarity, inliers=r.inliers,
+                        )
+                        price, _ = self.price_map.get(r.card_id, (None, ""))
+                        with self._lock:
+                            st.card_name, st.card_number = r.name, r.number
+                            st.price = price
+                            st.rarity = r.rarity
+                            # Show the slot variant (reverse holo by position).
+                            st.variant = _variant_label(card.variant)
+                            st.is_hit = (rarity_class(r.rarity) == RARITY_RARE_PLUS
+                                         and price is not None and price > HIT_PRICE)
+                            st.last_log_frame = clock
+                            st.count += 1
+                            if price is not None:
+                                st.total += price
+                else:
+                    self._cur_id, self._cur_n = None, 0
+        else:
+            self._cur_id, self._cur_n = None, 0
+
+        ev = self.boundary.update(card_seen, motion)
+        with self._lock:
+            if ev == PACK_END:
+                pack = self.session.close_pack()
+                self._last_logged = None
+                if pack is not None:
+                    st.last_pack_label = f"Pack {pack.index}: {pack.status.upper()} ({len(pack.cards)})"
+            st.packs = len(self.session.packs)
+            st.by_status = self.session.stats()["by_status"]
+
+    def snapshot(self) -> OverlayState:
+        """A consistent copy of the overlay state for a display thread to draw."""
+        with self._lock:
+            return replace(self.st)
+
+
 def run(
     source: Union[int, str],
     set_code: str,
@@ -385,8 +492,6 @@ def run(
     bundle = load_bundle(set_code)
     matcher = Matcher(bundle)
     gate = ConfidenceGate(GateConfig(min_inliers=min_inliers))
-    roi_detector = MotionFeatureROI()
-    smoother = BoxSmoother()
     session = Session(set_code)
 
     price_map = {r["card_id"]: (r.get("price"), r.get("price_variant") or "") for r in bundle.rows}
@@ -396,15 +501,10 @@ def run(
     set_name = bundle.manifest.get("set_name") or set_code.upper()
     st = OverlayState(set_name=set_name)
 
-    cur_id: Optional[str] = None
-    cur_n = 0
-    last_logged: Optional[str] = None
-
     writer = None
     show = save is None
     frame_no = 0
     fps = 30.0
-    boundary: Optional[BoundaryDetector] = None
 
     # Overlay positions: saved per-set layout drives both live and headless renders.
     # In live mode the two panels are mouse-draggable and the new layout is saved.
@@ -419,62 +519,15 @@ def run(
 
     with FrameSource(source).open() as src:
         fps = src.fps or 30.0
+        engine = OverlayEngine(
+            matcher, gate, session, price_map, st, boundary_fps=fps,
+            top=top, stable_frames=stable_frames, evidence_inliers=evidence_inliers,
+        )
         for frame in src.frames():
-            if boundary is None:
-                boundary = BoundaryDetector(BoundaryConfig(fps=fps))
             frame_no += 1
-            roi = smoother.update(roi_detector.detect(frame))
-            motion = roi_detector.last_motion
-
-            card_seen = False
-            if roi is not None:
-                x, y, w, h = roi
-                res = matcher.match_array(frame[y:y + h, x:x + w], top=top)
-                decision = gate.evaluate(res)
-                if res:
-                    r = res[0]
-                    card_seen = r.inliers >= evidence_inliers
-                    # The inserted basic energy false-matches the set's energy
-                    # card; it's a real card in frame (keeps card_seen) but is
-                    # never logged or priced as a pull.
-                    if decision.accepted and not is_tracked_supertype(r.supertype):
-                        cur_id, cur_n = None, 0
-                    elif decision.accepted:
-                        cur_n = cur_n + 1 if r.card_id == cur_id else 1
-                        cur_id = r.card_id
-                        if cur_n == stable_frames and r.card_id != last_logged:
-                            last_logged = r.card_id
-                            card = session.add(
-                                card_id=r.card_id, name=r.name, number=r.number,
-                                base_rarity=r.rarity, inliers=r.inliers,
-                            )
-                            price, _ = price_map.get(r.card_id, (None, ""))
-                            st.card_name, st.card_number = r.name, r.number
-                            st.price = price
-                            st.rarity = r.rarity
-                            # Show the slot variant (reverse-holo by position), not
-                            # the printing the price came from.
-                            st.variant = _variant_label(card.variant)
-                            # A "hit" is a rare+ that's also actually worth something.
-                            st.is_hit = (rarity_class(r.rarity) == RARITY_RARE_PLUS
-                                         and price is not None and price > HIT_PRICE)
-                            st.last_log_frame = frame_no
-                            st.count += 1
-                            if price is not None:
-                                st.total += price
-                    else:
-                        cur_id, cur_n = None, 0
-            else:
-                cur_id, cur_n = None, 0
-
-            ev = boundary.update(card_seen, motion)
-            if ev == PACK_END:
-                pack = session.close_pack()
-                last_logged = None
-                if pack is not None:
-                    st.last_pack_label = f"Pack {pack.index}: {pack.status.upper()} ({len(pack.cards)})"
-            st.packs = len(session.packs)
-            st.by_status = session.stats()["by_status"]
+            # Serial path: the frame counter is the clock, so last_log_frame and
+            # the draw frame_idx share units (offline behavior unchanged).
+            engine.process(frame, frame_no)
 
             if show:
                 drag.ensure(frame.shape[1], frame.shape[0])
@@ -523,6 +576,121 @@ def run(
 
     t = report["totals"]
     print(f"overlay run done: {frame_no} frames, {t['cards']} cards, "
+          f"{t['packs']} pack(s), total raw value {_money(t['total_raw_value'])}.")
+    return 0
+
+
+# Recognition runs ~3x/sec on this machine (see Phase 3.5 benchmark); the
+# boundary detector's time-based hysteresis is converted to ticks at this rate,
+# and dwell is a couple of ticks rather than several video frames. Tune on real
+# live footage.
+LIVE_RECOG_FPS = 3.0
+
+
+def run_live_threaded(
+    source: Union[int, str],
+    set_code: str,
+    export: Optional[str] = None,
+    stable_frames: int = 2,
+    min_inliers: int = 25,
+    top: int = 5,
+    evidence_inliers: int = 15,
+    facecam_frac: float = 0.30,
+    reset_layout: bool = False,
+    recog_fps: float = LIVE_RECOG_FPS,
+    max_seconds: Optional[float] = None,
+) -> int:
+    """Live overlay with recognition on a worker thread and a smooth display loop.
+
+    Capture and recognition run in the background (``ThreadedFrameSource`` +
+    ``RecognitionWorker``); the main thread just blits the freshest frame plus a
+    snapshot of the overlay state at display rate, so the video stays smooth even
+    though one recognition takes ~300 ms. ``max_seconds`` bounds the run for
+    tests/headless use.
+    """
+    bundle = load_bundle(set_code)
+    matcher = Matcher(bundle)
+    gate = ConfidenceGate(GateConfig(min_inliers=min_inliers))
+    session = Session(set_code)
+
+    price_map = {r["card_id"]: (r.get("price"), r.get("price_variant") or "") for r in bundle.rows}
+    if not any(p is not None for p, _ in price_map.values()):
+        print(f"warning: bundle '{set_code}' has no prices — run `packcapture fetch-prices {set_code}` first.")
+    set_name = bundle.manifest.get("set_name") or set_code.upper()
+    st = OverlayState(set_name=set_name)
+
+    # Boundary cadence is the recognition rate, not the camera rate, because the
+    # engine ticks the detector once per recognition (not once per frame).
+    engine = OverlayEngine(
+        matcher, gate, session, price_map, st, boundary_fps=recog_fps,
+        top=top, stable_frames=stable_frames, evidence_inliers=evidence_inliers,
+    )
+
+    fsrc = FrameSource(source)
+    tfs = ThreadedFrameSource(fsrc).start()
+    fps = fsrc.fps or 30.0
+    # Wall-clock tick shared by recognition (last_log_frame) and drawing
+    # (frame_idx) so the ticker slide reads a steady ~0.4 s regardless of either
+    # thread's rate.
+    clock = lambda: int(time.monotonic() * fps)
+    worker = RecognitionWorker(
+        tfs.latest, process=lambda f: engine.process(f, clock()), on_result=lambda r: None,
+    ).start()
+
+    ticker_origin, analytics_origin = (None, None) if reset_layout else load_layout(set_code)
+    drag = LayoutDrag(ticker_origin, analytics_origin, facecam_frac)
+    win = "packcapture overlay (live)"
+    cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+    cv2.setMouseCallback(win, drag.on_mouse)
+    print("live overlay (threaded): drag either panel to reposition; 's' saves "
+          "the layout, 'r' resets it, 'q'/Esc quits.")
+
+    start = time.monotonic()
+    try:
+        while not tfs.stopped:
+            seq, frame = tfs.latest()
+            if frame is None:
+                if time.monotonic() - start > 5.0:
+                    print("error: no frames from source within 5s.", file=__import__("sys").stderr)
+                    break
+                time.sleep(0.01)
+                continue
+            drag.ensure(frame.shape[1], frame.shape[0])
+            canvas = draw_overlay(
+                frame, engine.snapshot(), frame_idx=clock(), fps=fps,
+                facecam_h_frac=facecam_frac,
+                ticker_origin=drag.ticker, analytics_origin=drag.analytics,
+            )
+            cv2.imshow(win, canvas)
+            key = cv2.waitKey(1) & 0xFF
+            if key in (27, ord("q")):
+                break
+            if key == ord("s"):
+                path = save_layout(set_code, drag.ticker, drag.analytics)
+                drag.dirty = False
+                print(f"saved overlay layout: {path}")
+            elif key == ord("r"):
+                drag.ticker = drag.analytics = None
+                drag.ensure(frame.shape[1], frame.shape[0])
+                drag.dirty = True
+            if max_seconds is not None and time.monotonic() - start >= max_seconds:
+                break
+    finally:
+        worker.stop()
+        tfs.stop()
+        if drag.dirty:
+            path = save_layout(set_code, drag.ticker, drag.analytics)
+            print(f"saved overlay layout: {path}")
+        cv2.destroyAllWindows()
+
+    session.finalize()
+    report = _build_report(session, price_map, set_code, set_name, source)
+    if export:
+        with open(export, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2)
+        print(f"wrote analytics export: {export}")
+    t = report["totals"]
+    print(f"live overlay done: {worker.ticks} recognitions, {t['cards']} cards, "
           f"{t['packs']} pack(s), total raw value {_money(t['total_raw_value'])}.")
     return 0
 
