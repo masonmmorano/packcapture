@@ -60,6 +60,11 @@ In the control panel:
 3. Made a bad scan? Click **✕** on that row to delete it (or **Clear all**).
 4. Press **Export CSV** when you're done — it opens straight in Google Sheets.
 
+<p align="center">
+  <img src="assets/control.png" alt="PackCapture control panel mid-session" width="100%"><br>
+  <sub>The control panel mid-session: a live card log grouped by pack, hits highlighted, with running totals and CSV/JSON export.</sub>
+</p>
+
 ### Show prices on stream (OBS)
 
 PackCapture also serves a transparent overlay at **http://localhost:8770/overlay**.
