@@ -22,6 +22,14 @@
 > cards from a camera, a price overlay for OBS, an operator control panel, and
 > CSV/JSON export. A persistent session database and pull-rate analytics are next.
 
+## Highlights
+
+<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Offline & set-locked** — recognition searches one set's ~100–400 cards, no network at match time.<br>
+<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Live, in real time** — a threaded recognizer runs on any webcam, OBS Virtual Cam, or a phone-as-webcam while the video stays smooth.<br>
+<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **In-stream overlay for OBS** — a transparent price ticker + pack-analytics panel viewers see as you scan each card.<br>
+<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Operator control panel** — a browser cockpit to pick a set + camera, start/stop, watch the live card log, fix mis-scans, and export to CSV/JSON.<br>
+<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Pack-aware** — packs are segmented and labelled (`COMPLETE` / `SPEED_RIPPED` / `NO_HIT`); a per-pack checksum flags any full pack that doesn't reconcile.
+
 ## Install (Windows, Python 3.10+)
 
 ```powershell
