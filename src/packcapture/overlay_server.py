@@ -44,6 +44,17 @@ def _bgr_to_hex(bgr) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
+def _demo_state() -> OverlayState:
+    """A sample card for confirming the overlay renders/positions in OBS without
+    a live feed (the 'Send test card' button)."""
+    return OverlayState(
+        set_name="Phantasmal Flames", card_name="Mega Lopunny ex", card_number="128",
+        price=19.10, variant="holofoil", rarity="Ultra Rare", is_hit=True,
+        last_log_frame=0, total=19.10, count=1, packs=0,
+        by_status={"complete": 0, "speed_ripped": 0, "no_hit": 0},
+    )
+
+
 def state_to_payload(st: OverlayState) -> dict:
     """Serialize the overlay state for the browser (formatted + colors resolved)."""
     return {
@@ -91,9 +102,9 @@ PAGE = r"""<!DOCTYPE html>
   /* Ticker (top-right, under the facecam) */
   #ticker { top: 150px; opacity: 0; }
   #ticker.show { opacity: 1; }
-  #ticker.bump { animation: slideup 0.4s cubic-bezier(.22,1,.36,1); }
+  #ticker.bump { animation: slideup 0.22s cubic-bezier(.22,1,.36,1); }
   @keyframes slideup {
-    from { transform: translateY(90px); opacity: 0; }
+    from { transform: translateY(55px); opacity: 0; }
     to   { transform: translateY(0);    opacity: 1; }
   }
   #name { font-size: 34px; font-weight: 700; letter-spacing: .2px; }
@@ -221,17 +232,6 @@ def session_csv(cards: list) -> str:
     return buf.getvalue()
 
 
-def _operator_cards(engine, price_map) -> list:
-    """Every logged card so far, closed packs first then the open segment."""
-    rows = []
-    for p in engine.session.packs:
-        for c in p.cards:
-            rows.append(_card_row(c, price_map, p.index, p.status))
-    for c in getattr(engine.session, "_current", []):
-        rows.append(_card_row(c, price_map, None, "open"))
-    return rows
-
-
 class RecognitionController:
     """Owns the start/stop lifecycle of a live recognition run for the operator
     GUI. The overlay page and the control page both reflect whatever it's running;
@@ -256,7 +256,7 @@ class RecognitionController:
     def running(self) -> bool:
         return self._worker is not None
 
-    def start(self, source, set_code, min_inliers: int = 25, stable_frames: int = 2):
+    def start(self, source, set_code, min_inliers: int = 25, stable_frames: int = 1):
         with self._lock:
             if self._worker is not None:
                 return False, "already running"
@@ -321,23 +321,32 @@ class RecognitionController:
         with self._lock:
             eng = self._engine
             running = self._worker is not None
-            cards = _operator_cards(eng, self._price_map) if eng else []
-            value = sum(c["price"] for c in cards if c["price"] is not None)
-            return {
-                "running": running,
-                "ended": self._ended,
-                "set_code": self.set_code,
-                "set_name": self.set_name,
-                "source": self.source,
-                "error": self.error,
-                "totals": {
-                    "cards": len(cards),
-                    "packs": len(eng.session.packs) if eng else 0,
-                    "value_str": _money(round(value, 2)),
-                    "by_status": eng.session.stats()["by_status"] if eng else {},
-                },
-                "cards": cards,
-            }
+            meta = (self.set_code, self.set_name, self.source, self.error, self._ended)
+        if eng is None:
+            cards, packs, by_status = [], 0, {}
+        else:
+            rows, packs, by_status = eng.read_cards()   # lock-safe snapshot
+            cards = [_card_row(c, self._price_map, pk, status) for (pk, status, c) in rows]
+        value = sum(c["price"] for c in cards if c["price"] is not None)
+        set_code, set_name, source, error, ended = meta
+        return {
+            "running": running, "ended": ended,
+            "set_code": set_code, "set_name": set_name, "source": source, "error": error,
+            "totals": {
+                "cards": len(cards), "packs": packs,
+                "value_str": _money(round(value, 2)), "by_status": by_status,
+            },
+            "cards": cards,
+        }
+
+    def remove_card(self, index: int) -> bool:
+        return self._engine.remove_card(index) if self._engine is not None else False
+
+    def clear(self) -> bool:
+        if self._engine is None:
+            return False
+        self._engine.clear_session()
+        return True
 
     def build_report(self, source) -> Optional[dict]:
         from .overlay import _build_report
@@ -381,6 +390,12 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
   tr.hit { background: rgba(255,210,60,0.10); }
   tr.hit td.price { color: #ffd23c; font-weight: 800; }
   tr.hit td.name::after { content: " HIT"; color: #ffd23c; font-weight: 800; font-size: 12px; }
+  button.del { padding: 2px 8px; background: #3a2a2a; border-color: #6f3c3c; color: #ff9a9a; font-weight: 700; }
+  button.del:hover { background: #5a2f2f; }
+  tr.sep td { background: #1f2128; color: #c9c9c9; font-weight: 700; font-size: 13px;
+              letter-spacing: .6px; padding: 6px 10px; border-top: 2px solid #3a3d46; }
+  tr.sep .pv { color: #5adc78; margin-left: 10px; }
+  tr.sep .st-complete { color: #5adc78; } tr.sep .st-speed { color: #ffd23c; } tr.sep .st-open { color: #8ab4ff; }
   .err { color: #ff7a7a; margin: 8px 0; min-height: 16px; }
   .hint { color: #8a8a8a; font-size: 13px; }
   a { color: #8ab4ff; }
@@ -396,7 +411,8 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
   <button id="detect" title="Detect cameras">↻ cameras</button>
   <button class="go" id="start">Start</button>
   <button class="stop" id="stop" disabled>Stop</button>
-  <span class="hint">overlay for OBS: <a href="/overlay" target="_blank">/overlay</a></span>
+  <span class="hint">OBS overlay: <a href="/overlay" target="_blank">/overlay</a>
+    <button id="demo" title="Push a sample card to the overlay for OBS setup">Test card</button></span>
 </header>
 <main>
   <div class="err" id="err"></div>
@@ -406,13 +422,14 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
     <span>value <b class="val" id="t-value">$0.00</b></span>
     <span class="hint" id="t-status"></span>
     <span style="margin-left:auto">
+      <button class="stop" id="clear">Clear all</button>
       <a class="btn" id="csv" href="/api/export.csv">Export CSV</a>
       <a class="btn" id="jsonbtn" href="/api/export.json">JSON</a>
     </span>
   </div>
-  <div class="hint" style="margin-bottom:14px">CSV opens directly in Google Sheets (File → Import) / Excel.</div>
+  <div class="hint" style="margin-bottom:14px">Click ✕ to delete a mis-scan; CSV opens directly in Google Sheets (File → Import) / Excel.</div>
   <table>
-    <thead><tr><th>#</th><th>Card</th><th>No.</th><th>Rarity</th><th>Variant</th><th>Pack</th><th>Price</th></tr></thead>
+    <thead><tr><th>#</th><th>Card</th><th>No.</th><th>Rarity</th><th>Variant</th><th>Price</th><th></th></tr></thead>
     <tbody id="rows"></tbody>
   </table>
 </main>
@@ -443,6 +460,15 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
       .then(r=>r.json()).then(function(res){ if(!res.ok) el("err").textContent = res.message; });
   };
   el("stop").onclick = function(){ fetch("/api/stop", { method:"POST" }); };
+  el("demo").onclick = function(){ fetch("/api/demo", { method:"POST" }); };
+  el("clear").onclick = function(){ if (confirm("Clear all logged cards?")) fetch("/api/clear", { method:"POST" }); };
+  el("rows").onclick = function(e){
+    if (e.target.classList.contains("del")) {
+      var idx = parseInt(e.target.getAttribute("data-i"), 10);
+      fetch("/api/delete", { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ index: idx }) }).then(poll);
+    }
+  };
   function statusCounts(bs){ return ["COMPLETE "+(bs.complete||0), "SPEED "+(bs.speed_ripped||0), "NOHIT "+(bs.no_hit||0)].join("   "); }
   function poll(){
     fetch("/api/state").then(r=>r.json()).then(function(s){
@@ -457,14 +483,28 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
       el("t-packs").textContent = t.packs||0;
       el("t-value").textContent = t.value_str||"$0.00";
       el("t-status").textContent = statusCounts(t.by_status||{});
-      var rows = (s.cards||[]).map(function(c, i){
+      // Newest first, with a divider row between packs (instead of a pack column).
+      var cards = s.cards || [];
+      var html = "", lastKey;
+      for (var k = cards.length - 1; k >= 0; k--) {
+        var c = cards[k];
+        var key = (c.pack == null) ? "open" : c.pack;
+        if (key !== lastKey) {
+          lastKey = key;
+          var label, cls;
+          if (c.pack == null) { label = "Current pack"; cls = "st-open"; }
+          else { label = "Pack " + c.pack; cls = (c.status === "complete") ? "st-complete"
+                       : (c.status === "speed_ripped") ? "st-speed" : ""; }
+          var stx = (c.status && c.status !== "open") ? " · <span class='"+cls+"'>"+c.status.toUpperCase().replace("_"," ")+"</span>" : "";
+          html += "<tr class='sep'><td colspan='7'>"+label+stx+"</td></tr>";
+        }
         var rc = c.rarity_color || "#e8e8e8";
-        return "<tr class='"+(c.is_hit?"hit":"")+"'><td>"+(i+1)+"</td><td class='name'>"+c.name+
-               "</td><td>"+(c.number||"")+"</td><td style='color:"+rc+"'>"+(c.rarity||"")+
-               "</td><td>"+(c.variant||"")+"</td><td>"+(c.pack==null?"open":c.pack)+
-               "</td><td class='price'>"+c.price_str+"</td></tr>";
-      }).reverse().join("");
-      el("rows").innerHTML = rows;
+        html += "<tr class='"+(c.is_hit?"hit":"")+"'><td>"+(k+1)+"</td><td class='name'>"+c.name+
+                "</td><td>"+(c.number||"")+"</td><td style='color:"+rc+"'>"+(c.rarity||"")+
+                "</td><td>"+(c.variant||"")+"</td><td class='price'>"+c.price_str+"</td>"+
+                "<td><button class='del' data-i='"+k+"' title='Delete this card'>✕</button></td></tr>";
+      }
+      el("rows").innerHTML = html;
     }).catch(function(){});
   }
   setInterval(poll, 600); poll();
@@ -551,6 +591,21 @@ class OverlayServer:
                 elif self.path == "/api/stop":
                     ok, msg = ctl.stop()
                     self._json({"ok": ok, "message": msg})
+                elif self.path == "/api/demo":
+                    # Push a sample card to the overlay for OBS setup (no-op once a
+                    # real session starts publishing over it).
+                    server.publish(_demo_state())
+                    self._json({"ok": True, "message": "demo card sent"})
+                elif self.path == "/api/delete":
+                    length = int(self.headers.get("Content-Length") or 0)
+                    try:
+                        data = json.loads(self.rfile.read(length) or b"{}")
+                    except ValueError:
+                        data = {}
+                    ok = ctl.remove_card(int(data.get("index", -1)))
+                    self._json({"ok": ok})
+                elif self.path == "/api/clear":
+                    self._json({"ok": ctl.clear()})
                 else:
                     self.send_error(404)
 
@@ -669,7 +724,7 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 8770,
     min_inliers: int = 25,
-    stable_frames: int = 2,
+    stable_frames: int = 1,
     export: Optional[str] = None,
     max_seconds: Optional[float] = None,
 ) -> int:

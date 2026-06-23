@@ -134,6 +134,25 @@ class Session:
         """Cards logged toward the pack currently being filled."""
         return len(self._current)
 
+    def remove_card(self, index: int) -> bool:
+        """Remove a logged card by flattened index (closed packs in order, then
+        the open segment) — for fixing a mis-scan. Pack labels are left as-is."""
+        i = index
+        for pack in self.packs:
+            if i < len(pack.cards):
+                del pack.cards[i]
+                return True
+            i -= len(pack.cards)
+        if 0 <= i < len(self._current):
+            del self._current[i]
+            return True
+        return False
+
+    def clear(self) -> None:
+        """Drop every logged card and pack (start the session over)."""
+        self.packs = []
+        self._current = []
+
     def add(
         self,
         *,

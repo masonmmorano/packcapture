@@ -84,7 +84,7 @@ def cmd_overlay(args: argparse.Namespace) -> int:
             print("error: --threaded is for a live window; drop --save for a "
                   "headless render.", file=sys.stderr)
             return 1
-        stable = args.stable_frames if args.stable_frames is not None else 2
+        stable = args.stable_frames if args.stable_frames is not None else 1
         return run_live_threaded(
             source, args.set, export=args.export, stable_frames=stable,
             min_inliers=args.min_inliers, facecam_frac=args.facecam_frac,
@@ -108,7 +108,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     from .overlay_server import serve
 
     source: object = int(args.source) if str(args.source).isdigit() else args.source
-    stable = args.stable_frames if args.stable_frames is not None else 2
+    stable = args.stable_frames if args.stable_frames is not None else 1
     return serve(
         source, args.set, host=args.host, port=args.port,
         min_inliers=args.min_inliers, stable_frames=stable, export=args.export,
