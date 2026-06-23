@@ -35,6 +35,7 @@ from .overlay import (
     _rarity_color,
     build_engine,
 )
+from .pipeline.session import RARITY_RARE_PLUS, rarity_class
 
 
 def _bgr_to_hex(bgr) -> str:
@@ -191,10 +192,13 @@ PAGE = r"""<!DOCTYPE html>
 
 def _card_row(c, price_map, pack, status) -> dict:
     price, _ = price_map.get(c.card_id, (None, ""))
+    is_hit = (rarity_class(c.base_rarity) == RARITY_RARE_PLUS
+              and price is not None and price > HIT_PRICE)
     return {
         "name": c.name, "number": c.number, "rarity": c.base_rarity,
+        "rarity_color": _bgr_to_hex(_rarity_color(c.base_rarity)),
         "variant": c.variant, "price": price, "price_str": _money(price),
-        "pack": pack, "status": status, "card_id": c.card_id,
+        "is_hit": is_hit, "pack": pack, "status": status, "card_id": c.card_id,
     }
 
 
@@ -374,6 +378,9 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
   th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #262932; }
   th { color: #9a9a9a; font-weight: 600; font-size: 13px; letter-spacing: .5px; }
   td.price { color: #5adc78; text-align: right; }
+  tr.hit { background: rgba(255,210,60,0.10); }
+  tr.hit td.price { color: #ffd23c; font-weight: 800; }
+  tr.hit td.name::after { content: " HIT"; color: #ffd23c; font-weight: 800; font-size: 12px; }
   .err { color: #ff7a7a; margin: 8px 0; min-height: 16px; }
   .hint { color: #8a8a8a; font-size: 13px; }
   a { color: #8ab4ff; }
@@ -384,7 +391,9 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
   <h1>PACKCAPTURE</h1>
   <span><span class="dot" id="dot"></span> <span id="status">idle</span></span>
   <label>Set <select id="set"></select></label>
-  <label>Source <input id="source" size="10" value="0" title="camera index (0) or a video file path"></label>
+  <label>Source <input id="source" list="cams" size="12" value="0"
+         title="camera index (0) or a video file path"><datalist id="cams"></datalist></label>
+  <button id="detect" title="Detect cameras">↻ cameras</button>
   <button class="go" id="start">Start</button>
   <button class="stop" id="stop" disabled>Stop</button>
   <span class="hint">overlay for OBS: <a href="/overlay" target="_blank">/overlay</a></span>
@@ -409,18 +418,32 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
 </main>
 <script>
   function el(id){ return document.getElementById(id); }
+  var LS = window.localStorage;
+  if (LS.getItem("pc_source")) el("source").value = LS.getItem("pc_source");
   fetch("/api/sets").then(r=>r.json()).then(function(sets){
     var s = el("set");
     sets.forEach(function(code){ var o=document.createElement("option"); o.value=o.textContent=code; s.appendChild(o); });
+    var saved = LS.getItem("pc_set");
+    if (saved && sets.indexOf(saved) >= 0) s.value = saved;
   });
+  el("detect").onclick = function(){
+    el("detect").textContent = "…"; el("err").textContent = "";
+    fetch("/api/cameras").then(r=>r.json()).then(function(cams){
+      var dl = el("cams"); dl.innerHTML = "";
+      cams.forEach(function(c){ var o=document.createElement("option"); o.value=c.index; o.label=c.label; dl.appendChild(o); });
+      el("detect").textContent = "↻ cameras";
+      if (!cams.length) el("err").textContent = "No cameras found (start Iriun / OBS Virtual Cam).";
+    });
+  };
   el("start").onclick = function(){
     el("err").textContent = "";
+    LS.setItem("pc_set", el("set").value); LS.setItem("pc_source", el("source").value);
     fetch("/api/start", { method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({ set: el("set").value, source: el("source").value }) })
       .then(r=>r.json()).then(function(res){ if(!res.ok) el("err").textContent = res.message; });
   };
   el("stop").onclick = function(){ fetch("/api/stop", { method:"POST" }); };
-  function rarityCount(bs){ return ["COMPLETE "+(bs.complete||0), "SPEED "+(bs.speed_ripped||0), "NOHIT "+(bs.no_hit||0)].join("   "); }
+  function statusCounts(bs){ return ["COMPLETE "+(bs.complete||0), "SPEED "+(bs.speed_ripped||0), "NOHIT "+(bs.no_hit||0)].join("   "); }
   function poll(){
     fetch("/api/state").then(r=>r.json()).then(function(s){
       var on = s.running;
@@ -433,9 +456,11 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
       el("t-cards").textContent = t.cards||0;
       el("t-packs").textContent = t.packs||0;
       el("t-value").textContent = t.value_str||"$0.00";
-      el("t-status").textContent = rarityCount(t.by_status||{});
+      el("t-status").textContent = statusCounts(t.by_status||{});
       var rows = (s.cards||[]).map(function(c, i){
-        return "<tr><td>"+(i+1)+"</td><td>"+c.name+"</td><td>"+(c.number||"")+"</td><td>"+(c.rarity||"")+
+        var rc = c.rarity_color || "#e8e8e8";
+        return "<tr class='"+(c.is_hit?"hit":"")+"'><td>"+(i+1)+"</td><td class='name'>"+c.name+
+               "</td><td>"+(c.number||"")+"</td><td style='color:"+rc+"'>"+(c.rarity||"")+
                "</td><td>"+(c.variant||"")+"</td><td>"+(c.pack==null?"open":c.pack)+
                "</td><td class='price'>"+c.price_str+"</td></tr>";
       }).reverse().join("");
@@ -562,6 +587,10 @@ class OverlayServer:
                     sets = (sorted(p.name for p in d.iterdir() if (p / "manifest.json").exists())
                             if d.exists() else [])
                     self._json(sets)
+                elif self.path == "/api/cameras":
+                    from .capture.devices import enumerate_cameras
+                    self._json([{"index": c.index, "label": f"{c.index}  ({c.width}x{c.height})"}
+                                for c in enumerate_cameras()])
                 elif self.path in ("/", "/overlay"):
                     self._html(page)
                 elif self.path == "/events":

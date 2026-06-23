@@ -620,9 +620,16 @@ on the *same* server, while `/overlay` stays the clean OBS page.
   (polls `/api/state` ~0.6s). Endpoints: `POST /api/start`/`/api/stop`,
   `GET /api/state`/`/api/sets`. Validated end-to-end: start on `IMG_7032.MOV` →
   cards stream in, pack 1 closes **COMPLETE $2.79**, stop clean. 63 tests green.
-- **Next for the GUI:** end-of-session report view + export button (ties to SQLite
-  persistence below); camera picker (vs free-text source); correct/undo a
-  misrecognized card; preselect/remember last set+source.
+- **Export (DONE):** Export CSV / JSON buttons → `GET /api/export.csv|json`
+  (downloadable, timestamped). CSV is one row per card with a numeric price, so it
+  imports straight into Google Sheets. `session_csv()` builds it.
+- **Polish (DONE):** camera picker (`↻ cameras` → `/api/cameras` →
+  `enumerate_cameras`, fills a datalist; free-text file paths still work),
+  remembers last set + source (localStorage), and the card log color-codes rarity
+  + highlights hits (rare+ & >$1.50) in gold. 66 tests green.
+- **Next for the GUI:** end-of-session report view; correct/undo a misrecognized
+  card; live Google-Sheets sync (Sheets API + OAuth) if wanted later. The report
+  view + durable history tie to SQLite persistence below.
 
 ### Still needed beyond Phase 2 (running list)
 - **Live recognition tuning:** validate COMPLETE/SPEED_RIPPED/NO_HIT *live* on a

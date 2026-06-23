@@ -146,6 +146,21 @@ def test_operator_state_idle_shape():
     assert s["totals"]["cards"] == 0
 
 
+def test_card_row_has_rarity_color_and_hit_flag():
+    from types import SimpleNamespace
+    from packcapture.overlay_server import _card_row
+    rare = SimpleNamespace(card_id="me2-1", name="Mega Lopunny ex", number="128",
+                           base_rarity="Ultra Rare", variant="holofoil")
+    common = SimpleNamespace(card_id="me2-2", name="Oddish", number="2",
+                             base_rarity="Common", variant="normal")
+    pm = {"me2-1": (19.1, "holofoil"), "me2-2": (0.10, "normal")}
+    hit = _card_row(rare, pm, 1, "complete")
+    base = _card_row(common, pm, 1, "complete")
+    assert hit["is_hit"] is True            # rare+ AND price > $1.50
+    assert base["is_hit"] is False
+    assert hit["rarity_color"].startswith("#") and len(hit["rarity_color"]) == 7
+
+
 def test_session_csv_header_rows_and_missing_price():
     cards = [
         {"name": "Prinplup", "number": "1", "rarity": "Common", "variant": "normal",
