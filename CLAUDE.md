@@ -250,10 +250,15 @@ status-label coverage: record the other two ripping styles (speed-rip → hit fo
 `SPEED_RIPPED`, fan/hitless for `NO_HIT`) — see the START HERE block. Those tune
 hysteresis/burst thresholds on real cadence for the non-COMPLETE labels.
 
-To re-render the validated clip (uses the saved per-set layout if present):
+To re-render the validated clip, **render from the raw `IMG_7032.MOV`** (the
+clean camera source), not `IMG_7032_fixed.mp4` — that `_fixed` file is a *prior
+overlay render with the overlay burned into the pixels*, so feeding it back in
+double-stamps the overlay AND the burned-in corner panels knock two borderline
+cards below the gate (packs demote COMPLETE → SPEED_RIPPED). On the raw MOV the
+result is the validated **30 cards / 3 packs / all COMPLETE / $8.08**:
 
 ```powershell
-.\.venv\Scripts\python.exe -m packcapture overlay scratch\footage\IMG_7032_fixed.mp4 --set me2 --save scratch\footage\IMG_7032_overlay.mp4 --export scratch\footage\IMG_7032_overlay.json
+.\.venv\Scripts\python.exe -m packcapture overlay scratch\footage\IMG_7032.MOV --set me2 --save scratch\footage\IMG_7032_overlay_raw.mp4 --export scratch\footage\IMG_7032_overlay_raw.json
 ```
 
 New footage: transcode if HEVC, **check for pillarbox bars**
@@ -280,11 +285,21 @@ into `runner.py` (it's only in devmode so far), and Phase 4 below.
 - More YouTube footage needs `--cookies-from-browser` (bot challenge) and the
   tool sandbox disabled (CDN blocked); a phone photo of a real card dropped into
   the repo is the fastest clean test input.
-- Local-only scratch (git-ignored): `scratch/footage/` has `rip_long.mp4`
-  (ground-truth montage clip), `rip_window_dev_h264.mp4` (validated dev render),
-  `diag2.mp4` (working 10s clip); helper scripts `scratch/extract_frames.py`,
-  `match_frames.py`, `match_crop.py`, `boundary_probe.py` (boundary validation
-  vs. user-eyeballed timestamps).
+- **Never feed an overlay render back into the pipeline as a source.** A
+  `--save` render has the overlay burned into the pixels; re-running `overlay`/
+  `dev` on it double-stamps the panels and the burned-in corners block
+  recognition. Always render from the clean camera source (`IMG_7032.MOV`).
+  **Naming trap:** `scratch/footage/IMG_7032_fixed.mp4` *looks* like a clean
+  transcode but is actually a prior overlay render (old green-style overlay baked
+  in) — do not use it as input. The clean source is the raw `.MOV`; the current
+  validated render is `IMG_7032_overlay_raw.mp4`.
+- Local-only scratch (git-ignored): `scratch/footage/` has `IMG_7032.MOV` (raw
+  tripod source, 3 me2 packs — the clean recognition input), `IMG_7032_overlay_raw.mp4`
+  (validated all-COMPLETE overlay render), `rip_long.mp4` (ground-truth montage
+  clip), `rip_window_dev_h264.mp4` (validated dev render), `diag2.mp4` (working
+  10s clip); helper scripts `scratch/extract_frames.py`, `match_frames.py`,
+  `match_crop.py`, `boundary_probe.py` (boundary validation vs. user-eyeballed
+  timestamps).
 
 ## What it is
 
