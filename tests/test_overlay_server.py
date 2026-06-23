@@ -146,6 +146,15 @@ def test_operator_state_idle_shape():
     assert s["totals"]["cards"] == 0
 
 
+def test_clear_and_delete_endpoints_when_idle():
+    server = _control_server()
+    try:
+        assert _post(server, "/api/clear")["ok"] is False        # no session yet
+        assert _post(server, "/api/delete", {"index": 0})["ok"] is False
+    finally:
+        server.stop()
+
+
 def test_demo_endpoint_publishes_to_overlay():
     server = _control_server()
     try:

@@ -445,12 +445,12 @@ class OverlayEngine:
                     self._cur_id = r.card_id
                     if self._cur_n == self.stable_frames and r.card_id != self._last_logged:
                         self._last_logged = r.card_id
-                        card = self.session.add(
-                            card_id=r.card_id, name=r.name, number=r.number,
-                            base_rarity=r.rarity, inliers=r.inliers,
-                        )
                         price, _ = self.price_map.get(r.card_id, (None, ""))
-                        with self._lock:
+                        with self._lock:   # serialize session writes vs. GUI edits
+                            card = self.session.add(
+                                card_id=r.card_id, name=r.name, number=r.number,
+                                base_rarity=r.rarity, inliers=r.inliers,
+                            )
                             st.card_name, st.card_number = r.name, r.number
                             st.price = price
                             st.rarity = r.rarity
@@ -481,6 +481,43 @@ class OverlayEngine:
         """A consistent copy of the overlay state for a display thread to draw."""
         with self._lock:
             return replace(self.st)
+
+    def _recompute_totals(self) -> None:
+        """Re-derive the analytics aggregates from the session (after an edit).
+        Caller holds self._lock."""
+        cards = [c for p in self.session.packs for c in p.cards] + list(self.session._current)
+        self.st.count = len(cards)
+        self.st.total = round(sum((self.price_map.get(c.card_id, (None, ""))[0] or 0.0)
+                                  for c in cards), 2)
+        self.st.packs = len(self.session.packs)
+        self.st.by_status = self.session.stats()["by_status"]
+
+    def remove_card(self, index: int) -> bool:
+        """Delete a mis-scanned card (flattened index); recompute totals."""
+        with self._lock:
+            ok = self.session.remove_card(index)
+            if ok:
+                self._recompute_totals()
+            return ok
+
+    def clear_session(self) -> None:
+        """Drop all logged cards/packs and reset the overlay state."""
+        with self._lock:
+            self.session.clear()
+            self._cur_id, self._cur_n, self._last_logged = None, 0, None
+            self.st.card_name = self.st.card_number = self.st.rarity = self.st.variant = ""
+            self.st.price = None
+            self.st.is_hit = False
+            self.st.last_pack_label = ""
+            self._recompute_totals()
+
+    def read_cards(self):
+        """A consistent flattened snapshot of logged cards as (pack, status, card)
+        tuples, for the operator view. Holds the lock only to copy."""
+        with self._lock:
+            out = [(p.index, p.status, c) for p in self.session.packs for c in p.cards]
+            out += [(None, "open", c) for c in list(self.session._current)]
+            return out, len(self.session.packs), self.session.stats()["by_status"]
 
 
 def build_engine(

@@ -145,3 +145,20 @@ def test_stats_summary():
     assert st["cards_logged"] == 12
     assert st["by_variant"][VARIANT_REVERSE] == 2     # from the complete pack
     assert st["by_variant"][VARIANT_UNKNOWN] == 2     # from the two partials
+
+
+def test_remove_card_by_flattened_index_and_clear():
+    s = Session("me2")
+    s.add(card_id="a", name="A", number="1", base_rarity="Common")
+    s.add(card_id="b", name="B", number="2", base_rarity="Common")
+    s.close_pack()                                             # pack 1: [a, b]
+    s.add(card_id="c", name="C", number="3", base_rarity="Common")  # open segment: [c]
+
+    assert s.remove_card(1) is True                            # remove b (in pack 1)
+    assert [c.card_id for c in s.packs[0].cards] == ["a"]
+    assert s.remove_card(1) is True                            # index 1 now = c (open)
+    assert s.pending == 0
+    assert s.remove_card(9) is False                           # out of range
+
+    s.clear()
+    assert s.packs == [] and s.pending == 0

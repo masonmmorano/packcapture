@@ -15,10 +15,20 @@ import numpy as np
 
 
 class FrameSource:
-    def __init__(self, src: Union[int, str], backend: Optional[int] = None):
+    def __init__(
+        self,
+        src: Union[int, str],
+        backend: Optional[int] = None,
+        request_size: Optional[tuple] = (1920, 1080),
+    ):
         self.src = src
         self.is_device = isinstance(src, int) or (isinstance(src, str) and str(src).isdigit())
         self.backend = backend
+        # Cameras (incl. the OBS Virtual Camera) often default to 640x480 over
+        # DirectShow unless a resolution is requested; ask for full HD so the
+        # recognizer gets the device's real detail. The driver clamps to the
+        # nearest supported mode. Ignored for file sources.
+        self.request_size = request_size
         self._cap: Optional[cv2.VideoCapture] = None
 
     def open(self) -> "FrameSource":
@@ -32,6 +42,9 @@ class FrameSource:
                 cv2.VideoCapture(index, backend) if backend is not None
                 else cv2.VideoCapture(index)
             )
+            if self._cap is not None and self.request_size:
+                self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.request_size[0])
+                self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.request_size[1])
         else:
             path = str(self.src)
             if not Path(path).exists():

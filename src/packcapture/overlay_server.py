@@ -232,17 +232,6 @@ def session_csv(cards: list) -> str:
     return buf.getvalue()
 
 
-def _operator_cards(engine, price_map) -> list:
-    """Every logged card so far, closed packs first then the open segment."""
-    rows = []
-    for p in engine.session.packs:
-        for c in p.cards:
-            rows.append(_card_row(c, price_map, p.index, p.status))
-    for c in getattr(engine.session, "_current", []):
-        rows.append(_card_row(c, price_map, None, "open"))
-    return rows
-
-
 class RecognitionController:
     """Owns the start/stop lifecycle of a live recognition run for the operator
     GUI. The overlay page and the control page both reflect whatever it's running;
@@ -332,23 +321,32 @@ class RecognitionController:
         with self._lock:
             eng = self._engine
             running = self._worker is not None
-            cards = _operator_cards(eng, self._price_map) if eng else []
-            value = sum(c["price"] for c in cards if c["price"] is not None)
-            return {
-                "running": running,
-                "ended": self._ended,
-                "set_code": self.set_code,
-                "set_name": self.set_name,
-                "source": self.source,
-                "error": self.error,
-                "totals": {
-                    "cards": len(cards),
-                    "packs": len(eng.session.packs) if eng else 0,
-                    "value_str": _money(round(value, 2)),
-                    "by_status": eng.session.stats()["by_status"] if eng else {},
-                },
-                "cards": cards,
-            }
+            meta = (self.set_code, self.set_name, self.source, self.error, self._ended)
+        if eng is None:
+            cards, packs, by_status = [], 0, {}
+        else:
+            rows, packs, by_status = eng.read_cards()   # lock-safe snapshot
+            cards = [_card_row(c, self._price_map, pk, status) for (pk, status, c) in rows]
+        value = sum(c["price"] for c in cards if c["price"] is not None)
+        set_code, set_name, source, error, ended = meta
+        return {
+            "running": running, "ended": ended,
+            "set_code": set_code, "set_name": set_name, "source": source, "error": error,
+            "totals": {
+                "cards": len(cards), "packs": packs,
+                "value_str": _money(round(value, 2)), "by_status": by_status,
+            },
+            "cards": cards,
+        }
+
+    def remove_card(self, index: int) -> bool:
+        return self._engine.remove_card(index) if self._engine is not None else False
+
+    def clear(self) -> bool:
+        if self._engine is None:
+            return False
+        self._engine.clear_session()
+        return True
 
     def build_report(self, source) -> Optional[dict]:
         from .overlay import _build_report
@@ -392,6 +390,8 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
   tr.hit { background: rgba(255,210,60,0.10); }
   tr.hit td.price { color: #ffd23c; font-weight: 800; }
   tr.hit td.name::after { content: " HIT"; color: #ffd23c; font-weight: 800; font-size: 12px; }
+  button.del { padding: 2px 8px; background: #3a2a2a; border-color: #6f3c3c; color: #ff9a9a; font-weight: 700; }
+  button.del:hover { background: #5a2f2f; }
   .err { color: #ff7a7a; margin: 8px 0; min-height: 16px; }
   .hint { color: #8a8a8a; font-size: 13px; }
   a { color: #8ab4ff; }
@@ -418,13 +418,14 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
     <span>value <b class="val" id="t-value">$0.00</b></span>
     <span class="hint" id="t-status"></span>
     <span style="margin-left:auto">
+      <button class="stop" id="clear">Clear all</button>
       <a class="btn" id="csv" href="/api/export.csv">Export CSV</a>
       <a class="btn" id="jsonbtn" href="/api/export.json">JSON</a>
     </span>
   </div>
-  <div class="hint" style="margin-bottom:14px">CSV opens directly in Google Sheets (File → Import) / Excel.</div>
+  <div class="hint" style="margin-bottom:14px">Click ✕ to delete a mis-scan; CSV opens directly in Google Sheets (File → Import) / Excel.</div>
   <table>
-    <thead><tr><th>#</th><th>Card</th><th>No.</th><th>Rarity</th><th>Variant</th><th>Pack</th><th>Price</th></tr></thead>
+    <thead><tr><th>#</th><th>Card</th><th>No.</th><th>Rarity</th><th>Variant</th><th>Pack</th><th>Price</th><th></th></tr></thead>
     <tbody id="rows"></tbody>
   </table>
 </main>
@@ -456,6 +457,14 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
   };
   el("stop").onclick = function(){ fetch("/api/stop", { method:"POST" }); };
   el("demo").onclick = function(){ fetch("/api/demo", { method:"POST" }); };
+  el("clear").onclick = function(){ if (confirm("Clear all logged cards?")) fetch("/api/clear", { method:"POST" }); };
+  el("rows").onclick = function(e){
+    if (e.target.classList.contains("del")) {
+      var idx = parseInt(e.target.getAttribute("data-i"), 10);
+      fetch("/api/delete", { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ index: idx }) }).then(poll);
+    }
+  };
   function statusCounts(bs){ return ["COMPLETE "+(bs.complete||0), "SPEED "+(bs.speed_ripped||0), "NOHIT "+(bs.no_hit||0)].join("   "); }
   function poll(){
     fetch("/api/state").then(r=>r.json()).then(function(s){
@@ -475,7 +484,8 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
         return "<tr class='"+(c.is_hit?"hit":"")+"'><td>"+(i+1)+"</td><td class='name'>"+c.name+
                "</td><td>"+(c.number||"")+"</td><td style='color:"+rc+"'>"+(c.rarity||"")+
                "</td><td>"+(c.variant||"")+"</td><td>"+(c.pack==null?"open":c.pack)+
-               "</td><td class='price'>"+c.price_str+"</td></tr>";
+               "</td><td class='price'>"+c.price_str+"</td>"+
+               "<td><button class='del' data-i='"+i+"' title='Delete this card'>✕</button></td></tr>";
       }).reverse().join("");
       el("rows").innerHTML = rows;
     }).catch(function(){});
@@ -569,6 +579,16 @@ class OverlayServer:
                     # real session starts publishing over it).
                     server.publish(_demo_state())
                     self._json({"ok": True, "message": "demo card sent"})
+                elif self.path == "/api/delete":
+                    length = int(self.headers.get("Content-Length") or 0)
+                    try:
+                        data = json.loads(self.rfile.read(length) or b"{}")
+                    except ValueError:
+                        data = {}
+                    ok = ctl.remove_card(int(data.get("index", -1)))
+                    self._json({"ok": ok})
+                elif self.path == "/api/clear":
+                    self._json({"ok": ctl.clear()})
                 else:
                     self.send_error(404)
 
