@@ -86,6 +86,22 @@ def cmd_overlay(args: argparse.Namespace) -> int:
     )
 
 
+def cmd_list_cameras(args: argparse.Namespace) -> int:
+    from .capture.devices import enumerate_cameras
+
+    cams = enumerate_cameras(max_index=args.max_index)
+    if not cams:
+        print(f"No usable cameras found (indices 0-{args.max_index}).")
+        print("If OBS is running, start its Virtual Camera so it appears here.")
+        return 1
+    print("Usable cameras:")
+    for c in cams:
+        fps = f"{c.fps:.0f}fps" if c.fps else "?fps"
+        print(f"  index {c.index}:  {c.width}x{c.height}  {fps}")
+    print("Pass an index as the source, e.g. `packcapture overlay <index> --set me2`.")
+    return 0
+
+
 def cmd_list_sets(args: argparse.Namespace) -> int:
     from .config import data_dir
 
@@ -159,6 +175,12 @@ def build_parser() -> argparse.ArgumentParser:
     o.add_argument("--reset-layout", action="store_true",
                    help="Ignore the saved panel layout and start from default positions")
     o.set_defaults(func=cmd_overlay)
+
+    lc = sub.add_parser("list-cameras",
+                        help="Probe device indices (find the OBS Virtual Cam)")
+    lc.add_argument("--max-index", type=int, default=10,
+                    help="Highest device index to probe (default 10)")
+    lc.set_defaults(func=cmd_list_cameras)
 
     s = sub.add_parser("list-sets", help="List locally built bundles")
     s.set_defaults(func=cmd_list_sets)

@@ -243,12 +243,29 @@
   rarity **color-coded by tier**, and the gold **HIT** tag requires rare+ AND raw
   price > $1.50.
 - **Tests: 44 green** (added energy exclusion, supertype round-trip, layout drag).
+- **PR #3 merged to main** (`40c8323`); the energy/overlay/doc work is now on
+  main. Cleaned up: deleted junk double-overlay renders + the misleading
+  `IMG_7032_fixed.mp4`; deleted the merged `phase3-pipeline`/`phase3-segmented`
+  remote branches.
+- **Live-capture planning + Phase 0 started** (branch `phase3-live-core`). Decided
+  the live-alongside-OBS design (see "Phase 3.5 design" below) and built the
+  **real-time core**: `capture/threaded.py` (`ThreadedFrameSource` +
+  `RecognitionWorker`), `capture/devices.py` + `packcapture list-cameras`,
+  `tests/test_threaded.py`. **49 tests green.** Benchmarked the bottleneck:
+  ORB match ~337 ms → ~3 recognitions/sec, which is why live needs threading
+  (numbers + full plan in the Phase 3.5 section).
 
 ### Next action when resuming (do this first)
-**The `COMPLETE` path is validated on real footage.** What's left for full
-status-label coverage: record the other two ripping styles (speed-rip → hit for
-`SPEED_RIPPED`, fan/hitless for `NO_HIT`) — see the START HERE block. Those tune
-hysteresis/burst thresholds on real cadence for the non-COMPLETE labels.
+**Two live tracks, both in the Phase 3.5 design section below:**
+1. **Phase 0 wiring (software, do now):** extract `recognize_step` from
+   `overlay.run`'s loop, drive it from `RecognitionWorker` on a smooth display
+   thread, make dwell time-based, feed BoundaryDetector the recognition rate.
+2. **Phase 1 validation (needs the user):** enable OBS Virtual Camera on the
+   tripod cam, `packcapture list-cameras` to get the index, then run the live
+   operator overlay and tune dwell/boundary.
+
+Also still open (offline): record the other two ripping styles (speed-rip → hit
+for `SPEED_RIPPED`, fan/hitless for `NO_HIT`) — see the START HERE block.
 
 To re-render the validated clip, **render from the raw `IMG_7032.MOV`** (the
 clean camera source), not `IMG_7032_fixed.mp4` — that `_fixed` file is a *prior
@@ -471,12 +488,87 @@ dependency. The polished UI (set picker, report screen) stays Phase 6.
 Store `supertype` in the bundle (helps classify energy), and add `variant`/
 `is_holo` columns to the session log.
 
+## Phase 3.5 design — Live capture alongside OBS (decided 2026-06-23)
+
+Goal: run recognition **live** on a tripod camera while the user records in OBS,
+on **one PC sharing one camera**. Overlay must reach **both** surfaces (user's
+call): an **operator window** first (v1), then **into the OBS stream** like the
+hypeoverlay competitor (Phase 2). Same recognition core feeds both.
+
+### The two hard constraints (measured/verified, don't re-derive)
+- **Windows webcams are exclusive-access.** If OBS owns the physical cam,
+  `cv2.VideoCapture(0)` can't open it too. **Fix: OBS Virtual Camera** — OBS
+  captures the tripod cam and emits a virtual cam that OpenCV reads as just
+  another device index (`source.py` already supports this; `list-cameras` finds
+  the index).
+- **Recognition is the bottleneck, not the camera.** Benchmarked on me2 @ 1080p
+  (2026-06-23): ROI detect **35 ms/frame**, ORB match over 130 candidates
+  **~337 ms → ~3 recognitions/sec**. The old serial `overlay.run` loop (read →
+  match → draw → read) therefore runs live at **~2.7 fps** — choppy and laggy.
+  3 recognitions/sec is *enough* (cards are held ~1s) **once recognition stops
+  blocking the video.** The fix is threading, not a faster matcher.
+
+### Phase 0 — real-time core (DONE 2026-06-23, branch `phase3-live-core`)
+- **`capture/threaded.py`:** `ThreadedFrameSource` (background reader → newest-wins
+  single-slot `LatestSlot`, drops stale frames, sets `CAP_PROP_BUFFERSIZE=1`) +
+  `RecognitionWorker` (runs a `process(frame)` callable on the freshest frame on
+  its own thread, only on a new `seq`, hands results to `on_result`). Both take
+  plain callables — no matcher/overlay imports — so they unit-test against a fake
+  source with no camera/bundle. `tests/test_threaded.py` (5 tests: newest-wins,
+  frame-drop under a slow consumer, worker processes-only-new + skips-None).
+- **`capture/devices.py` + `packcapture list-cameras`:** brute-force opens device
+  indices `0..max` (CAP_DSHOW on Windows) and reports the ones that deliver a
+  frame, with resolution/fps — to find the OBS Virtual Cam index. A failed-open
+  index is often one OBS already holds (informative).
+
+### Phase 0 — still to wire (next, needs the live cam in hand to tune)
+- **Extract the recognition step** out of `overlay.run`'s for-loop body
+  (`overlay.py:422-485`) into a reusable `recognize_step(frame, ctx) -> OverlayState`
+  so the offline `--save` path stays serial through the *same* code while a new
+  live path drives it from `RecognitionWorker`. Display loop = main thread, 30-60
+  fps, blits the latest frame + `draw_overlay(state)`, never waits on recognition.
+- **Dwell must become time-based.** `cur_n == stable_frames` (overlay.py:445)
+  assumes per-video-frame; at ~3 recog/sec that's a 1.6s dwell. Switch to "stable
+  for ~0.4-0.6s" on recognition ticks.
+- **BoundaryDetector fps** → feed it the *recognition* rate (~3), not video fps
+  (it's already `BoundaryConfig(fps=...)`-parameterized; one-line cadence change).
+
+### Phase 1 — operator window, live
+`packcapture overlay <obs-virtual-cam-index> --set me2` already opens the operator
+window; the gap is just the threaded core above + pointing at the right index.
+User (off-keyboard): enable OBS Virtual Camera with the tripod cam as source, then
+`packcapture list-cameras` to get the index. Then validate + tune dwell/boundary
+on real live cadence.
+
+### Phase 2 — in-stream overlay (viewer-facing)
+- New `overlay_server.py`: a tiny local HTTP + WebSocket server serving a
+  **transparent HTML/CSS** page that renders the *same* `OverlayState` pushed as
+  JSON (slide-up/fade + gradient panels become CSS — real alpha, crisper than
+  cv2 drawing).
+- OBS adds a **Browser Source** → `http://localhost:PORT/overlay`, composited over
+  the cam scene.
+- **No feedback loop (the subtle part):** packcapture *recognizes* from the OBS
+  **Virtual Cam scene = cam only**, and *outputs* to the Browser Source, which
+  lives only in the **Record/Stream scene = cam + browser**. Keep the Virtual Cam
+  scene clean and recognition never sees its own overlay. Document the OBS scene
+  setup.
+- `OverlayState` becomes the single source of truth feeding **two renderers**
+  (cv2 operator window + web view).
+
+### Cross-cutting
+- **Session persistence → SQLite** (Phase 4 anyway) gets urgent once sessions run
+  live for an hour — an in-memory `Session` loses everything on a crash. Do it
+  alongside Phase 1.
+- **Latency:** overlay trails the real card by recognition latency + dwell
+  (~0.5-0.8s). Fine for held cards; a card flashed faster than a dwell window
+  won't log — same trade-off as offline.
+
 ## Repo layout
 
 ```
 src/packcapture/
   cli.py                 argparse entry point (build-set / match / list-sets /
-                         fetch-prices / fetch-meta / dev / overlay)
+                         list-cameras / fetch-prices / fetch-meta / dev / overlay)
   config.py              paths, API endpoints, ORB params
   mediautil.py           to_h264(): re-encode a render in place (shared)
   devmode.py             dev viewer: video + auto-ROI + scrolling log, side by side
@@ -489,8 +581,10 @@ src/packcapture/
     orb_matcher.py       set-locked matcher (ratio test + RANSAC)
   pipeline/              settle / confidence / roi / boundary / session / runner
   capture/source.py      FrameSource: webcam / OBS / video file
+  capture/threaded.py    ThreadedFrameSource + RecognitionWorker (real-time core)
+  capture/devices.py     enumerate_cameras(): probe indices for `list-cameras`
   storage/bundle.py      load/save the on-disk bundle (price + supertype columns optional)
-tests/                   pytest suite (44 tests; test_overlay.py covers price+export)
+tests/                   pytest suite (49 tests; test_threaded.py covers the live core)
 ```
 
 ## Dev setup (Windows)
