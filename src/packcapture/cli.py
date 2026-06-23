@@ -98,6 +98,12 @@ def cmd_overlay(args: argparse.Namespace) -> int:
     )
 
 
+def cmd_gui(args: argparse.Namespace) -> int:
+    from .overlay_server import gui
+
+    return gui(set_code=args.set, host=args.host, port=args.port)
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     from .overlay_server import serve
 
@@ -202,6 +208,13 @@ def build_parser() -> argparse.ArgumentParser:
     o.add_argument("--reset-layout", action="store_true",
                    help="Ignore the saved panel layout and start from default positions")
     o.set_defaults(func=cmd_overlay)
+
+    g = sub.add_parser("gui",
+                       help="Operator control panel in the browser (start/stop, live log, report)")
+    g.add_argument("--set", default=None, help="Preselect a set (optional; pick it in the page)")
+    g.add_argument("--host", default="127.0.0.1", help="Bind address (default 127.0.0.1)")
+    g.add_argument("--port", type=int, default=8770, help="HTTP port (default 8770)")
+    g.set_defaults(func=cmd_gui)
 
     sv = sub.add_parser("serve",
                         help="Serve the live overlay as a web page for an OBS Browser Source")

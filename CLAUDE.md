@@ -606,6 +606,24 @@ windows forever. Status:
   Source lives only in the **Record/Stream scene = cam + browser**. Document the
   exact scene routing once confirmed live.
 
+### Operator GUI — web control panel (v1 BUILT 2026-06-23, branch `phase3-browser-overlay`)
+**Decision (user):** the overlay (ticker + analytics panels) stays a *clean,
+viewer-facing* page for OBS — never add controls to it. The **GUI is a separate
+operator surface**: `packcapture gui` serves a `/control` page (operator-only)
+on the *same* server, while `/overlay` stays the clean OBS page.
+- `RecognitionController` (in `overlay_server.py`) owns the start/stop lifecycle:
+  the operator picks a **set + source** in the browser and presses Start → it
+  spins up the engine + threaded worker; Stop tears down + finalizes. A file
+  source auto-ends. `serve` now also goes through the controller.
+- `/control` page: status dot, set dropdown (`/api/sets`), source input,
+  Start/Stop, live card log + running totals + pack-status breakdown
+  (polls `/api/state` ~0.6s). Endpoints: `POST /api/start`/`/api/stop`,
+  `GET /api/state`/`/api/sets`. Validated end-to-end: start on `IMG_7032.MOV` →
+  cards stream in, pack 1 closes **COMPLETE $2.79**, stop clean. 63 tests green.
+- **Next for the GUI:** end-of-session report view + export button (ties to SQLite
+  persistence below); camera picker (vs free-text source); correct/undo a
+  misrecognized card; preselect/remember last set+source.
+
 ### Still needed beyond Phase 2 (running list)
 - **Live recognition tuning:** validate COMPLETE/SPEED_RIPPED/NO_HIT *live* on a
   real pack; tune `LIVE_RECOG_FPS` / dwell / boundary on real cadence.
@@ -632,9 +650,11 @@ windows forever. Status:
 ```
 src/packcapture/
   cli.py                 argparse entry point (build-set / match / list-sets /
-                         list-cameras / fetch-prices / fetch-meta / dev / overlay / serve)
-  overlay_server.py      serve: headless recognition + transparent HTML/CSS overlay
-                         over SSE for an OBS Browser Source (the in-stream overlay)
+                         list-cameras / fetch-prices / fetch-meta / dev / overlay /
+                         serve / gui)
+  overlay_server.py      the web layer: clean /overlay (viewer, SSE) for OBS +
+                         /control operator GUI (RecognitionController start/stop,
+                         live card log); serve (auto-start) and gui (operator) entries
   config.py              paths, API endpoints, ORB params
   mediautil.py           to_h264(): re-encode a render in place (shared)
   devmode.py             dev viewer: video + auto-ROI + scrolling log, side by side
@@ -651,8 +671,9 @@ src/packcapture/
   capture/threaded.py    ThreadedFrameSource (+ file pacing) + RecognitionWorker (real-time core)
   capture/devices.py     enumerate_cameras(): probe indices for `list-cameras`
   storage/bundle.py      load/save the on-disk bundle (price + supertype columns optional)
-tests/                   pytest suite (59 tests; test_threaded / test_overlay
-                         (OverlayEngine) / test_overlay_server cover the live + web core)
+tests/                   pytest suite (63 tests; test_threaded / test_overlay
+                         (OverlayEngine) / test_overlay_server (web + control) cover
+                         the live + web core)
 ```
 
 ## Dev setup (Windows)

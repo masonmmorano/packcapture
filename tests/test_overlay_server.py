@@ -7,9 +7,31 @@ import urllib.request
 from packcapture.overlay import OverlayState
 from packcapture.overlay_server import (
     OverlayServer,
+    RecognitionController,
     _bgr_to_hex,
     state_to_payload,
 )
+
+
+def _control_server():
+    server = OverlayServer(port=0)
+    server.controller = RecognitionController(server)
+    return server.start()
+
+
+def _post(server, path, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{server._port}{path}", data=data, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=3) as r:
+        return json.loads(r.read())
+
+
+def _get(server, path):
+    with urllib.request.urlopen(f"http://127.0.0.1:{server._port}{path}", timeout=3) as r:
+        return r.read().decode()
 
 
 def test_bgr_to_hex():
@@ -81,3 +103,43 @@ def test_sse_stream_emits_current_payload():
         assert payload["price_str"] == "$0.20"
     finally:
         server.stop()
+
+
+# --- operator control page + controller ---
+
+def test_control_page_served():
+    server = _control_server()
+    try:
+        assert "PACKCAPTURE" in _get(server, "/control")
+        sets = json.loads(_get(server, "/api/sets"))
+        assert isinstance(sets, list)
+        state = json.loads(_get(server, "/api/state"))
+        assert state["running"] is False
+    finally:
+        server.stop()
+
+
+def test_controller_rejects_bad_set():
+    ctl = RecognitionController(OverlayServer(port=0))
+    ok, msg = ctl.start("0", "no_such_set_zzz")   # fails on the bundle, never touches a camera
+    assert ok is False
+    assert "no_such_set_zzz" in msg
+    assert ctl.running is False
+
+
+def test_api_start_bad_set_and_stop_when_idle():
+    server = _control_server()
+    try:
+        res = _post(server, "/api/start", {"source": "0", "set": "no_such_set_zzz"})
+        assert res["ok"] is False and "no_such_set_zzz" in res["message"]
+        assert _post(server, "/api/stop")["ok"] is False   # nothing running
+    finally:
+        server.stop()
+
+
+def test_operator_state_idle_shape():
+    ctl = RecognitionController(OverlayServer(port=0))
+    s = ctl.operator_state()
+    assert s["running"] is False
+    assert s["cards"] == []
+    assert s["totals"]["cards"] == 0
