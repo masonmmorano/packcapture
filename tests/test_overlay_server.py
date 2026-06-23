@@ -9,6 +9,7 @@ from packcapture.overlay_server import (
     OverlayServer,
     RecognitionController,
     _bgr_to_hex,
+    session_csv,
     state_to_payload,
 )
 
@@ -143,3 +144,31 @@ def test_operator_state_idle_shape():
     assert s["running"] is False
     assert s["cards"] == []
     assert s["totals"]["cards"] == 0
+
+
+def test_session_csv_header_rows_and_missing_price():
+    cards = [
+        {"name": "Prinplup", "number": "1", "rarity": "Common", "variant": "normal",
+         "pack": 1, "status": "complete", "price": 0.17, "card_id": "me2-1"},
+        {"name": "Sableye", "number": "2", "rarity": "Rare", "variant": "reverse holo",
+         "pack": None, "status": "open", "price": None, "card_id": "me2-2"},
+    ]
+    lines = session_csv(cards).strip().splitlines()
+    assert lines[0].startswith("#,name,number")
+    assert "Prinplup" in lines[1] and "0.17" in lines[1]   # numeric price, not "$0.17"
+    assert "Sableye" in lines[2]                            # missing price -> empty, no crash
+    assert len(lines) == 3
+
+
+def test_export_csv_endpoint_serves_downloadable_csv():
+    server = _control_server()
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{server._port}/api/export.csv", timeout=3) as r:
+            ctype = r.headers.get("Content-Type")
+            disp = r.headers.get("Content-Disposition")
+            body = r.read().decode()
+        assert "text/csv" in ctype
+        assert "attachment" in disp and ".csv" in disp
+        assert body.splitlines()[0].startswith("#,name")   # header even when idle/empty
+    finally:
+        server.stop()

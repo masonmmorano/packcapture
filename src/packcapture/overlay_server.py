@@ -17,6 +17,8 @@ in the Record/Stream scene. See the OBS setup printed by ``serve``.
 """
 from __future__ import annotations
 
+import csv
+import io
 import json
 import threading
 import time
@@ -192,8 +194,27 @@ def _card_row(c, price_map, pack, status) -> dict:
     return {
         "name": c.name, "number": c.number, "rarity": c.base_rarity,
         "variant": c.variant, "price": price, "price_str": _money(price),
-        "pack": pack, "status": status,
+        "pack": pack, "status": status, "card_id": c.card_id,
     }
+
+
+# Export columns: one row per logged card, numeric price so a spreadsheet can sum
+# it. CSV imports straight into Google Sheets / Excel / Numbers.
+_CSV_COLUMNS = ["#", "name", "number", "rarity", "variant", "pack", "status", "price", "card_id"]
+
+
+def session_csv(cards: list) -> str:
+    """Serialize the operator card list (from ``operator_state``) to CSV text."""
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(_CSV_COLUMNS)
+    for i, c in enumerate(cards, 1):
+        w.writerow([
+            i, c["name"], c["number"], c["rarity"], c["variant"],
+            "" if c["pack"] is None else c["pack"], c["status"],
+            "" if c["price"] is None else c["price"], c.get("card_id", ""),
+        ])
+    return buf.getvalue()
 
 
 def _operator_cards(engine, price_map) -> list:
@@ -342,6 +363,9 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
   button.go { background: #2f6f3f; border-color: #3c8c50; }
   button.stop { background: #6f2f2f; border-color: #8c3c3c; }
   button:disabled { opacity: .45; cursor: default; }
+  a.btn { text-decoration: none; color: #e8e8e8; background: #23252c;
+          border: 1px solid #3a3d46; border-radius: 6px; padding: 7px 12px; font-weight: 700; }
+  a.btn:hover { background: #2b2e36; }
   main { padding: 20px 24px; }
   .totals { display: flex; gap: 28px; font-size: 17px; margin-bottom: 16px; flex-wrap: wrap; }
   .totals b { font-size: 22px; }
@@ -372,7 +396,12 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
     <span><b id="t-packs">0</b> packs</span>
     <span>value <b class="val" id="t-value">$0.00</b></span>
     <span class="hint" id="t-status"></span>
+    <span style="margin-left:auto">
+      <a class="btn" id="csv" href="/api/export.csv">Export CSV</a>
+      <a class="btn" id="jsonbtn" href="/api/export.json">JSON</a>
+    </span>
   </div>
+  <div class="hint" style="margin-bottom:14px">CSV opens directly in Google Sheets (File → Import) / Excel.</div>
   <table>
     <thead><tr><th>#</th><th>Card</th><th>No.</th><th>Rarity</th><th>Variant</th><th>Pack</th><th>Price</th></tr></thead>
     <tbody id="rows"></tbody>
@@ -500,12 +529,33 @@ class OverlayServer:
                 else:
                     self.send_error(404)
 
+            def _download(self, body: bytes, content_type: str, filename: str):
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
             def do_GET(self):
                 if self.path == "/control":
                     self._html(control_page)
                 elif self.path == "/api/state":
                     ctl = server.controller
                     self._json(ctl.operator_state() if ctl else {"running": False})
+                elif self.path.startswith("/api/export.csv"):
+                    ctl = server.controller
+                    cards = ctl.operator_state()["cards"] if ctl else []
+                    code = (ctl.set_code if ctl and ctl.set_code else "session")
+                    fn = f"packcapture_{code}_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+                    self._download(session_csv(cards).encode("utf-8"), "text/csv; charset=utf-8", fn)
+                elif self.path.startswith("/api/export.json"):
+                    ctl = server.controller
+                    report = ctl.build_report(ctl.source) if ctl else None
+                    code = (ctl.set_code if ctl and ctl.set_code else "session")
+                    fn = f"packcapture_{code}_{time.strftime('%Y%m%d_%H%M%S')}.json"
+                    body = json.dumps(report or {}, indent=2).encode("utf-8")
+                    self._download(body, "application/json", fn)
                 elif self.path == "/api/sets":
                     from .config import data_dir
                     d = data_dir()
