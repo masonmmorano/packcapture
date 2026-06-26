@@ -39,9 +39,42 @@ def test_rarity_class_buckets():
 
 
 def test_template_shape():
+    # 4 commons, 3 uncommons, then slot 8 reverse, slot 9 hit-or-reverse,
+    # slot 10 the guaranteed rare+.
     t = standard_template()
     assert len(t) == 10
-    assert [s.variant for s in t] == [VARIANT_NORMAL] * 7 + [VARIANT_REVERSE] * 2 + [VARIANT_NORMAL]
+    assert [s.variant for s in t] == [VARIANT_NORMAL] * 7 + [VARIANT_REVERSE] * 3
+    assert [s.expect_rarity for s in t[7:]] == [None, None, RARITY_RARE_PLUS]
+
+
+def test_full_pack_without_a_rare_is_not_complete():
+    # Every pack guarantees a rare+ in the premium block; 10 cards with none
+    # can't have flipped cleanly -> not COMPLETE.
+    s = Session("me2")
+    _add_all(s, [("c%d" % i, "Common") for i in range(4)]
+                + [("u%d" % i, "Uncommon") for i in range(3)]
+                + [("revC", "Common"), ("revU", "Uncommon"), ("u4", "Uncommon")])
+    pack = s.close_pack()
+    assert pack.status != STATUS_COMPLETE and not pack.reconciled
+    assert any("rare" in i.lower() for i in pack.issues)
+
+
+def test_edited_pack_completes_and_labels_rare_as_hit():
+    # Drag a valid composition (incl. a rare) into a pack in any order; it
+    # rearranges to the template, reconciles, and labels the rare as the hit
+    # (a holo) with the other two premium cards as reverse holos.
+    s = Session("me2")
+    _add_all(s, [("c1", "Common"), ("c2", "Common"), ("c3", "Common"), ("c4", "Common"),
+                 ("u1", "Uncommon"), ("u2", "Uncommon"), ("u3", "Uncommon"),
+                 ("hit", "Ultra Rare"), ("revC", "Common")])   # 9 cards, rare mid-pack
+    s.close_pack()
+    s.add(card_id="revU", name="revU", number="1", base_rarity="Uncommon")  # 10th
+    assert s.move_card(9, 1) is True
+    p = s.packs[0]
+    assert len(p.cards) == 10 and p.status == STATUS_COMPLETE
+    hit = next(c for c in p.cards if c.base_rarity == "Ultra Rare")
+    assert hit.variant == VARIANT_NORMAL and hit.is_holo        # the hit is a holo, not a reverse
+    assert sum(1 for c in p.cards if c.variant == VARIANT_REVERSE) == 2
 
 
 def test_no_auto_close_boundary_closes():
@@ -162,3 +195,93 @@ def test_remove_card_by_flattened_index_and_clear():
 
     s.clear()
     assert s.packs == [] and s.pending == 0
+
+
+def test_move_card_between_packs_relabels_both():
+    # A boundary fired one card early: pack 1 got 11 cards (its slot-10 rare plus
+    # pack 2's rare), pack 2 got 9 (missing its rare). Moving the stray rare to
+    # pack 2 should make both reconcile as COMPLETE.
+    s = Session("me2")
+    _add_all(s, CLEAN_PACK)                                     # 10, reconcilable
+    s.add(card_id="rare2", name="rare2", number="1", base_rarity="Double Rare")  # 11th
+    s.close_pack()                                              # pack 1: 11 cards
+    _add_all(s, CLEAN_PACK[:-1])                                # pack 2: 9 (no rare)
+    s.close_pack()
+    assert len(s.packs[0].cards) == 11 and len(s.packs[1].cards) == 9
+    assert s.packs[0].status != STATUS_COMPLETE                # over-full, flagged
+
+    # Flattened index of the stray (last card of pack 1) = 10.
+    assert s.move_card(10, 2) is True
+    assert len(s.packs[0].cards) == 10 and len(s.packs[1].cards) == 10
+    assert s.packs[0].status == STATUS_COMPLETE                # both reconcile now
+    assert s.packs[1].status == STATUS_COMPLETE
+
+
+def test_move_card_to_open_segment():
+    s = Session("me2")
+    s.add(card_id="a", name="A", number="1", base_rarity="Common")
+    s.add(card_id="b", name="B", number="2", base_rarity="Common")
+    s.close_pack()                                             # pack 1: [a, b]
+    assert s.move_card(0, None) is True                       # move a -> open segment
+    assert [c.card_id for c in s.packs[0].cards] == ["b"]
+    assert [c.card_id for c in s._current] == ["a"]
+
+
+def test_move_card_empties_source_pack_and_renumbers():
+    s = Session("me2")
+    s.add(card_id="solo", name="Solo", number="1", base_rarity="Common")
+    s.close_pack()                                             # pack 1: [solo]
+    s.add(card_id="x", name="X", number="2", base_rarity="Common")
+    s.close_pack()                                             # pack 2: [x]
+    assert len(s.packs) == 2
+    assert s.move_card(0, 2) is True                          # empties pack 1
+    assert len(s.packs) == 1                                  # dropped
+    assert s.packs[0].index == 1                              # renumbered
+    assert [c.card_id for c in s.packs[0].cards] == ["x", "solo"]
+
+
+def test_move_completes_pack_from_valid_composition_any_order():
+    # Operator drags the right 10 cards into a pack but jumbled; it should still
+    # reconcile to COMPLETE once the count is right (cards rearranged to slots).
+    s = Session("me2")
+    _add_all(s, [("c1", "Common"), ("rare1", "Double Rare"), ("u1", "Uncommon"),
+                 ("revC", "Common"), ("c2", "Common"), ("u2", "Uncommon"),
+                 ("revU", "Uncommon"), ("u3", "Uncommon"), ("c3", "Common")])
+    s.close_pack()                                            # pack 1: 9 cards
+    s.add(card_id="c4", name="c4", number="1", base_rarity="Common")  # open: the 10th
+    assert s.packs[0].status != STATUS_COMPLETE
+
+    assert s.move_card(9, 1) is True                          # drag the 10th into pack 1
+    assert len(s.packs[0].cards) == 10
+    assert s.packs[0].status == STATUS_COMPLETE               # composition reconciles
+    assert s.packs[0].reconciled
+
+
+def test_move_keeps_pack_incomplete_when_composition_cannot_fit():
+    # 10 uncommons can't fill the four common slots -> never COMPLETE.
+    s = Session("me2")
+    _add_all(s, [("u%d" % i, "Uncommon") for i in range(9)])
+    s.close_pack()
+    s.add(card_id="u9", name="u9", number="1", base_rarity="Uncommon")
+    assert s.move_card(9, 1) is True
+    assert len(s.packs[0].cards) == 10
+    assert s.packs[0].status != STATUS_COMPLETE
+
+
+def test_remove_from_complete_pack_relabels():
+    s = Session("me2")
+    _add_all(s, CLEAN_PACK)
+    s.close_pack()
+    assert s.packs[0].status == STATUS_COMPLETE
+    assert s.remove_card(0) is True                           # now 9 cards
+    assert len(s.packs[0].cards) == 9
+    assert s.packs[0].status != STATUS_COMPLETE               # no longer reconciles
+
+
+def test_move_card_bad_index_or_noop():
+    s = Session("me2")
+    s.add(card_id="a", name="A", number="1", base_rarity="Common")
+    s.close_pack()
+    assert s.move_card(9, 1) is False                         # bad index
+    assert s.move_card(0, 1) is False                         # already in pack 1 (no-op)
+    assert s.move_card(0, 5) is False                         # bad destination

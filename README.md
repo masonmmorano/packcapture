@@ -22,13 +22,22 @@
 > cards from a camera, a price overlay for OBS, an operator control panel, and
 > CSV/JSON export. A persistent session database and pull-rate analytics are next.
 
+## See it in action
+
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=h8b6s0PN_vs">
+    <img src="https://img.youtube.com/vi/h8b6s0PN_vs/maxresdefault.jpg" alt="Watch a live one-pack rip recognized in real time" width="75%">
+  </a><br>
+  <sub>▶ <b><a href="https://www.youtube.com/watch?v=h8b6s0PN_vs">Watch a one-pack rip</a></b> — cards recognized, priced, and logged live with the in-stream overlay.</sub>
+</p>
+
 ## Highlights
 
 <img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Offline & set-locked** — recognition searches one set's ~100–400 cards, no network at match time.<br>
 <img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Live, in real time** — a threaded recognizer runs on any webcam, OBS Virtual Cam, or a phone-as-webcam while the video stays smooth.<br>
 <img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **In-stream overlay for OBS** — a transparent price ticker + pack-analytics panel viewers see as you scan each card.<br>
 <img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Operator control panel** — a browser cockpit to pick a set + camera, start/stop, watch the live card log, fix mis-scans, and export to CSV/JSON.<br>
-<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Pack-aware** — packs are segmented and labelled (`COMPLETE` / `SPEED_RIPPED` / `NO_HIT`); a per-pack checksum flags any full pack that doesn't reconcile.
+<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Pack-aware** — knows a pack's shape (**4 commons → 3 uncommons → reverse holo → hit slot → guaranteed rare**); packs are segmented and labelled (`COMPLETE` / `SPEED_RIPPED` / `NO_HIT`), a per-pack checksum flags any full pack that doesn't reconcile, and you can drag a card to its right pack to fix a missed boundary.
 
 ## Install (Windows, Python 3.10+)
 
@@ -62,7 +71,7 @@ In the control panel:
 
 <p align="center">
   <img src="assets/control.png" alt="PackCapture control panel mid-session" width="100%"><br>
-  <sub>The control panel mid-session: a live card log grouped by pack, hits highlighted, with running totals and CSV/JSON export.</sub>
+  <sub>The control panel mid-session: a live card log grouped by pack (drag a card to repack it, ✕ to fix a mis-scan), hits highlighted, with running totals, a COMPLETE / SPEED / NOHIT breakdown, and CSV/JSON export.</sub>
 </p>
 
 ### Show prices on stream (OBS)

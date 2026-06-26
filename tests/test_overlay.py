@@ -200,3 +200,52 @@ def test_engine_snapshot_is_independent_copy(pack_bundle):
     assert snap is not eng.st
     eng.st.count = 99
     assert snap.count != 99  # snapshot is a point-in-time copy
+
+
+def test_engine_does_not_double_log_a_held_card(pack_bundle):
+    # A card left in frame for a long time must log exactly once.
+    eng = _engine(pack_bundle)
+    img = synth_card(1)
+    clock = 0
+    for _ in range(40):
+        clock += 1
+        eng.process(img, lambda: clock)
+    assert eng.st.count == 1
+    assert [c.card_id for c in eng.session._current] == ["fake-0"]  # synth_card(1) -> fake-0
+
+
+def test_engine_dedupes_held_card_across_stray_recognition(pack_bundle):
+    # The reported bug: a long hold of card 1 with a brief different card 2 in
+    # the middle must not let card 1 log twice (a single "last id" guard would).
+    eng = _engine(pack_bundle)
+    a, b = synth_card(1), synth_card(2)
+    clock = 0
+
+    def step(img):
+        nonlocal clock
+        clock += 1
+        eng.process(img, lambda: clock)
+
+    for _ in range(3):
+        step(a)            # logs fake-1
+    for _ in range(2):
+        step(b)            # logs fake-2 (different card flips the old guard)
+    for _ in range(5):
+        step(a)            # card 1 back -> must NOT re-log
+    assert [c.card_id for c in eng.session._current] == ["fake-0", "fake-1"]
+
+
+def test_engine_can_relog_a_card_after_delete(pack_bundle):
+    # Deleting a card frees its id from the per-pack dedupe set so it can be
+    # re-scanned (e.g. after fixing a mis-scan).
+    eng = _engine(pack_bundle)
+    img = synth_card(1)
+    for _ in range(2):
+        eng.process(img, lambda: 0)
+    assert eng.st.count == 1
+    assert eng.remove_card(0) is True
+    assert eng.st.count == 0
+    eng._cur_id, eng._cur_n = None, 0          # card left and came back
+    for _ in range(2):
+        eng.process(img, lambda: 0)
+    assert eng.st.count == 1                    # re-logged

@@ -17,11 +17,13 @@ A segment with zero recognized cards is not counted as a pack at all (the
 counter.
 
 The old 10-card checksum + variant-by-position logic is retained — it is what
-*earns* the ``COMPLETE`` label. ORB tells us *which* card a slot holds and the
-bundle gives its base rarity, but position is the only reliable signal for the
-two reverse-holo slots (a reverse holo can be any base rarity). Position is
-only trustworthy when the whole pack was flipped in factory order, so packs
-that close at any other count get ``variant="unknown"`` rather than a guess.
+*earns* the ``COMPLETE`` label. A pack is 4 commons, 3 uncommons, then 3 premium
+slots: slot 8 a reverse holo, slot 9 the hit slot (a secret rare, or a 2nd
+reverse holo), and slot 10 the guaranteed rare-or-better. ORB tells us *which*
+card a slot holds and the bundle gives its base rarity, but position is the only
+reliable signal for the reverse holos (a reverse holo can be any base rarity).
+Position is only trustworthy when the whole pack was flipped in factory order, so
+packs that close at any other count get ``variant="unknown"`` rather than a guess.
 
 The slot template is configurable per set (a few sets / promo configs differ);
 `standard_template()` is the common 10-card layout used by me2.
@@ -80,11 +82,27 @@ class Slot:
 
 
 def standard_template() -> list[Slot]:
-    """The common modern 10-card layout: 4 commons, 3 uncommons, 2 reverses, 1 rare+."""
-    slots = [Slot(i, VARIANT_NORMAL, RARITY_COMMON) for i in range(1, 5)]      # 1-4
-    slots += [Slot(i, VARIANT_NORMAL, RARITY_UNCOMMON) for i in range(5, 8)]   # 5-7
-    slots += [Slot(i, VARIANT_REVERSE, None) for i in range(8, 10)]            # 8-9 (any rarity)
-    slots.append(Slot(10, VARIANT_NORMAL, RARITY_RARE_PLUS))                   # 10
+    """Phantasmal Flames (`me2`) 10-card layout, by slot:
+
+      * **1-4** common (circle)
+      * **5-7** uncommon (diamond)
+      * **8**  guaranteed *standard reverse holo* (any base rarity)
+      * **9**  the *hit* slot — Illustration / Special Illustration / Mega Hyper
+               Rare; if no secret rare, it defaults to a 2nd reverse holo
+      * **10** guaranteed *rare-or-better* (a holo Rare by default; upgrades to a
+               Double Rare / ex or a textured Ultra Rare / Full Art)
+
+    Slots 8-9 accept any base rarity (``expect_rarity=None``) because a reverse
+    holo can be any rarity and slot 9 may carry a chase hit; slot 10 is the rarity
+    anchor that *must* be rare+. At label time, a rare+ card in this block (the
+    slot-9 hit, the slot-10 rare) is marked the hit (a holo); a non-rare+ card in
+    slots 8-9 is a reverse holo.
+    """
+    slots = [Slot(i, VARIANT_NORMAL, RARITY_COMMON) for i in range(1, 5)]      # 1-4 commons
+    slots += [Slot(i, VARIANT_NORMAL, RARITY_UNCOMMON) for i in range(5, 8)]   # 5-7 uncommons
+    slots += [Slot(8, VARIANT_REVERSE, None)]                                  # 8  reverse holo
+    slots += [Slot(9, VARIANT_REVERSE, None)]                                  # 9  hit, or 2nd reverse
+    slots.append(Slot(10, VARIANT_REVERSE, RARITY_RARE_PLUS))                  # 10 guaranteed rare+
     return slots
 
 
@@ -141,6 +159,11 @@ class Session:
         for pack in self.packs:
             if i < len(pack.cards):
                 del pack.cards[i]
+                if not pack.cards:               # emptied -> drop it, renumber the rest
+                    self.packs.remove(pack)
+                    self._renumber()
+                else:
+                    self._relabel(pack)          # status may change (e.g. no longer 10)
                 return True
             i -= len(pack.cards)
         if 0 <= i < len(self._current):
@@ -198,9 +221,43 @@ class Session:
             return None
         cards = self._current
         self._current = []
+        status, reconciled, issues = self._label(cards)
+        pack = Pack(
+            index=len(self.packs) + 1,
+            cards=cards,
+            status=status,
+            reconciled=reconciled,
+            issues=issues,
+        )
+        self.packs.append(pack)
+        return pack
+
+    def _label(self, cards: list[LoggedCard]) -> tuple[str, bool, list[str]]:
+        """Assign provisional slot/variant by position and derive a pack's
+        status, reconciliation and issues from its cards.
+
+        Used both when a pack closes and when an edit (delete / move) changes a
+        pack's contents, so an edited pack re-checksums against the template.
+        """
+        for i, c in enumerate(cards):
+            c.slot = i + 1
+            slot = self.template[i] if i < self.pack_size else None
+            if slot is None:
+                c.variant, c.is_holo = VARIANT_UNKNOWN, False
+            elif slot.variant == VARIANT_REVERSE:
+                # Premium block (last 3): the rare+ card is the hit (a holo, not a
+                # reverse); the others are reverse holos.
+                if rarity_class(c.base_rarity) == RARITY_RARE_PLUS:
+                    c.variant, c.is_holo = VARIANT_NORMAL, True
+                else:
+                    c.variant, c.is_holo = VARIANT_REVERSE, True
+            else:
+                c.variant, c.is_holo = VARIANT_NORMAL, False
 
         issues: list[str] = []
         if len(cards) == self.pack_size:
+            # Slot 10 expects rare+, so _reconcile already enforces the guaranteed
+            # rare; slots 8-9 (reverse / hit) accept any base rarity.
             issues = self._reconcile(cards)
         elif len(cards) > self.pack_size:
             # More cards than a pack holds = a missed boundary; surface it.
@@ -212,8 +269,7 @@ class Session:
         if not reconciled:
             # Factory order can't be trusted; don't guess variants.
             for c in cards:
-                c.variant = VARIANT_UNKNOWN
-                c.is_holo = False
+                c.variant, c.is_holo = VARIANT_UNKNOWN, False
 
         if reconciled:
             status = STATUS_COMPLETE
@@ -221,16 +277,97 @@ class Session:
             status = STATUS_SPEED_RIPPED
         else:
             status = STATUS_NO_HIT
+        return status, reconciled, issues
 
-        pack = Pack(
-            index=len(self.packs) + 1,
-            cards=cards,
-            status=status,
-            reconciled=reconciled,
-            issues=issues,
-        )
-        self.packs.append(pack)
-        return pack
+    def move_card(self, index: int, dest_pack: Optional[int]) -> bool:
+        """Move a logged card to a different pack — for fixing a missed boundary.
+
+        ``index`` is the flattened position (closed packs in order, then the open
+        segment, matching :meth:`remove_card`); ``dest_pack`` is a 1-based pack
+        index, or ``None`` for the open segment. The card is appended to the
+        destination, the source and destination packs are re-labelled, and a
+        source pack left empty is dropped and the rest renumbered. Returns False
+        on a bad index or a no-op (already in that container).
+        """
+        i = index
+        src_list: Optional[list[LoggedCard]] = None
+        src_pack: Optional[Pack] = None
+        for pack in self.packs:
+            if i < len(pack.cards):
+                src_list, src_pack = pack.cards, pack
+                break
+            i -= len(pack.cards)
+        else:
+            if 0 <= i < len(self._current):
+                src_list = self._current
+            else:
+                return False
+
+        if dest_pack is None:
+            dest_list, dest_pack_obj = self._current, None
+        elif 1 <= dest_pack <= len(self.packs):
+            dest_pack_obj = self.packs[dest_pack - 1]
+            dest_list = dest_pack_obj.cards
+        else:
+            return False
+
+        if dest_list is src_list:
+            return False  # already in that container — nothing to move
+
+        card = src_list.pop(i)
+        dest_list.append(card)
+
+        if src_pack is not None and not src_pack.cards:
+            self.packs.remove(src_pack)
+            self._renumber()
+            src_pack = None
+        if src_pack is not None:
+            self._relabel(src_pack)
+        if dest_pack_obj is not None:
+            self._relabel(dest_pack_obj)
+        return True
+
+    def _arrange_for_template(self, cards: list[LoggedCard]) -> Optional[list[LoggedCard]]:
+        """Reorder an edited full pack so each card lands in a slot whose rarity it
+        satisfies (constrained slots filled first, leftovers into the any/reverse
+        slots). This lets an operator drag the right 10 cards into a pack in *any*
+        order and still have it reconcile to COMPLETE. Returns the new order, or
+        None if the composition can't satisfy the template (then it won't COMPLETE).
+        """
+        if len(cards) != self.pack_size:
+            return None
+        pools: dict[str, list[LoggedCard]] = {}
+        for c in cards:
+            pools.setdefault(rarity_class(c.base_rarity), []).append(c)
+        result: list[Optional[LoggedCard]] = [None] * self.pack_size
+        any_slots: list[int] = []
+        for i, slot in enumerate(self.template):
+            if slot.expect_rarity is None:           # reverse-holo slot: any rarity
+                any_slots.append(i)
+                continue
+            pool = pools.get(slot.expect_rarity)
+            if not pool:                             # not enough of this rarity
+                return None
+            result[i] = pool.pop(0)
+        leftovers = [c for pool in pools.values() for c in pool]
+        if len(leftovers) != len(any_slots):
+            return None
+        for i, c in zip(any_slots, leftovers):
+            result[i] = c
+        return result  # every slot filled
+
+    def _relabel(self, pack: Pack) -> None:
+        """Re-evaluate an edited pack. Unlike close_pack (which trusts factory
+        order), a manually edited pack is rearranged to fit the template if its
+        composition allows, so moving the right cards in completes it."""
+        arranged = self._arrange_for_template(pack.cards)
+        if arranged is not None:
+            pack.cards[:] = arranged
+        pack.status, pack.reconciled, pack.issues = self._label(pack.cards)
+
+    def _renumber(self) -> None:
+        for n, pack in enumerate(self.packs, 1):
+            pack.index = n
 
     def finalize(self) -> Optional[Pack]:
         """End the session: close any open segment. Returns it if one was open."""

@@ -69,8 +69,8 @@ _RARITY_COLORS = {
 def _rarity_color(rarity: str):
     return _RARITY_COLORS.get((rarity or "").strip().lower(), INK)
 
-TICKER_ANIM_S = 0.22        # seconds for a new card to slide up into place (snappy;
-                            # a new card also interrupts/restarts the slide)
+TICKER_ANIM_S = 0.30        # seconds for a new card to slide up into place (snappy
+                            # but not jarring; a new card interrupts/restarts the slide)
 HIT_PRICE = 1.50            # a rare+ only earns the gold HIT tag above this raw price
 
 # Session slot-variant -> ticker display text.
@@ -414,7 +414,10 @@ class OverlayEngine:
         self.boundary = BoundaryDetector(BoundaryConfig(fps=boundary_fps))
         self._cur_id: Optional[str] = None
         self._cur_n = 0
-        self._last_logged: Optional[str] = None
+        # Card ids already logged into the *current* open pack. A card that
+        # lingers in frame (or a stray mis-accept that flips a single "last id")
+        # can't re-log within the same pack; cleared when the pack closes.
+        self._recent_logged: set = set()
         self._lock = threading.Lock()
 
     def process(self, frame: np.ndarray, clock: Callable[[], int]) -> None:
@@ -444,8 +447,8 @@ class OverlayEngine:
                 elif decision.accepted:
                     self._cur_n = self._cur_n + 1 if r.card_id == self._cur_id else 1
                     self._cur_id = r.card_id
-                    if self._cur_n == self.stable_frames and r.card_id != self._last_logged:
-                        self._last_logged = r.card_id
+                    if self._cur_n == self.stable_frames and r.card_id not in self._recent_logged:
+                        self._recent_logged.add(r.card_id)
                         price, _ = self.price_map.get(r.card_id, (None, ""))
                         with self._lock:   # serialize session writes vs. GUI edits
                             card = self.session.add(
@@ -472,7 +475,7 @@ class OverlayEngine:
         with self._lock:
             if ev == PACK_END:
                 pack = self.session.close_pack()
-                self._last_logged = None
+                self._recent_logged.clear()
                 if pack is not None:
                     st.last_pack_label = f"Pack {pack.index}: {pack.status.upper()} ({len(pack.cards)})"
             st.packs = len(self.session.packs)
@@ -496,7 +499,21 @@ class OverlayEngine:
     def remove_card(self, index: int) -> bool:
         """Delete a mis-scanned card (flattened index); recompute totals."""
         with self._lock:
+            # Drop its id from the dedupe set so the operator can re-scan it.
+            flat = [c for p in self.session.packs for c in p.cards] + list(self.session._current)
+            cid = flat[index].card_id if 0 <= index < len(flat) else None
             ok = self.session.remove_card(index)
+            if ok:
+                if cid is not None:
+                    self._recent_logged.discard(cid)
+                self._recompute_totals()
+            return ok
+
+    def move_card(self, index: int, dest_pack: Optional[int]) -> bool:
+        """Move a logged card to another pack (flattened index; ``dest_pack`` is a
+        1-based pack index, or None for the open segment); recompute totals."""
+        with self._lock:
+            ok = self.session.move_card(index, dest_pack)
             if ok:
                 self._recompute_totals()
             return ok
@@ -505,7 +522,8 @@ class OverlayEngine:
         """Drop all logged cards/packs and reset the overlay state."""
         with self._lock:
             self.session.clear()
-            self._cur_id, self._cur_n, self._last_logged = None, 0, None
+            self._cur_id, self._cur_n = None, 0
+            self._recent_logged.clear()
             self.st.card_name = self.st.card_number = self.st.rarity = self.st.variant = ""
             self.st.price = None
             self.st.is_hit = False
@@ -529,15 +547,19 @@ def build_engine(
     stable_frames: int = 5,
     evidence_inliers: int = 15,
     top: int = 5,
+    fast: bool = False,
 ):
     """Load a bundle and wire up an :class:`OverlayEngine`.
 
     Returns ``(engine, price_map, set_name)``; the engine owns the session
     (``engine.session``) and overlay state (``engine.st``). Shared by the live
     window and the browser-overlay server so they stay in lockstep.
+
+    ``fast`` enables the matcher's beta prefilter (~3x faster recognition at a
+    small accuracy risk); off by default keeps the exhaustive matcher.
     """
     bundle = load_bundle(set_code)
-    matcher = Matcher(bundle)
+    matcher = Matcher(bundle, prefilter_top=FAST_PREFILTER_TOP if fast else 0)
     gate = ConfidenceGate(GateConfig(min_inliers=min_inliers))
     price_map = {r["card_id"]: (r.get("price"), r.get("price_variant") or "") for r in bundle.rows}
     if not any(p is not None for p, _ in price_map.values()):
@@ -661,6 +683,11 @@ def run(
 # live footage.
 LIVE_RECOG_FPS = 3.0
 
+# Beta "fast mode": how many candidates survive the matcher prefilter for the
+# full ratio-test scan. ~25 of me2's 130 is a generous cut that holds accuracy
+# on the validation footage while cutting recognition latency ~3x.
+FAST_PREFILTER_TOP = 25
+
 
 def run_live_threaded(
     source: Union[int, str],
@@ -674,6 +701,7 @@ def run_live_threaded(
     reset_layout: bool = False,
     recog_fps: float = LIVE_RECOG_FPS,
     max_seconds: Optional[float] = None,
+    fast: bool = False,
 ) -> int:
     """Live overlay with recognition on a worker thread and a smooth display loop.
 
@@ -688,6 +716,7 @@ def run_live_threaded(
     engine, price_map, set_name = build_engine(
         set_code, boundary_fps=recog_fps, min_inliers=min_inliers,
         stable_frames=stable_frames, evidence_inliers=evidence_inliers, top=top,
+        fast=fast,
     )
     session, st = engine.session, engine.st
 

@@ -315,15 +315,117 @@ ran a bit slow, see below).
   a **matcher prefilter** (cheap rank → RANSAC only top-K) to cut ~337 ms → ~100 ms
   — designed, **offered but not built**.
 
+### Done so far (added 2026-06-25 — pre-handoff polish for the original requester)
+Three asks before the user sends the tool to the person it was built for:
+- **High-volume export (216+ packs).** The per-card CSV (`session_csv`) already
+  streams fine at scale; **added a per-pack summary CSV** (`session_packs_csv` +
+  `GET /api/export_packs.csv` + a **Packs CSV** button on the control page): one
+  row per pack (pack #, status, reconciled, cards, raw_value, issues) for when a
+  card-by-card scroll of 2,000+ rows is unwieldy. Stayed **dependency-free** (no
+  openpyxl/xlsx — user was fine skipping Excel since CSV opens in Excel/Sheets).
+  Stress-tested: a synthetic **216-pack / 2,160-card** session → 217-row packs CSV
+  + 2,161-row cards CSV, no issue (`test_export_scales_to_216_packs`).
+- **Matcher prefilter as opt-in "⚡ Fast (beta)" mode** (the live-latency lever).
+  `Matcher(prefilter_top=N)`: a cheap first pass using only the strongest
+  `prefilter_qdesc` (120) query descriptors ranks all candidates, then the full
+  ratio-test+RANSAC runs on just the top `N` (`FAST_PREFILTER_TOP=25` of me2's
+  130). **Off by default** (exhaustive matcher stays the default everywhere);
+  threaded through `build_engine(fast=)` → `RecognitionController.start(fast=)` →
+  `/api/start` + a **control-page checkbox** (persisted in localStorage), plus
+  `--fast` on `overlay --threaded` and `serve`. **Benchmarked on the real me2
+  bundle: 316 ms → 145 ms/match (~2.2×), 25/25 top-1 agreement** with exhaustive
+  (accuracy held perfectly on the sample). `test_prefilter_preserves_top1`.
+- **Ticker slide slowed 0.22 s → 0.30 s** (user: the 0.22 s snap was a touch
+  jarring) in both renderers — cv2 `TICKER_ANIM_S` and the browser `/overlay` CSS.
+- **README: live demo video.** Added a "See it in action" section — a clickable
+  YouTube thumbnail (`maxresdefault`) linking the user's 1-min one-pack-rip demo
+  (`youtube.com/watch?v=h8b6s0PN_vs`). GitHub can't embed a YT player; thumbnail →
+  link is the standard.
+- **75 tests green.** (Note: a new OBS recording landed at
+  `scratch/footage/2026-06-23 18-31-05.mp4`.)
+
+#### Live latency — how it works best (the user's "make notes" ask)
+Perceived delay = recognition latency + dwell. Levers, in order of impact:
+1. **Lighting** is the biggest practical lever — poor light → weak/missed ORB
+   matches → re-tries → apparent lag. Bright, even, glare-free light first.
+2. **⚡ Fast (beta)** ~halves the matcher time (316→145 ms here). Default-off
+   because it's a heuristic narrowing; on me2 it matched exhaustive 25/25, but
+   verify on a new set before trusting it for a real session.
+3. **Hold each card ~1 s, steady** — recognition samples ~3–7×/s; a card flashed
+   faster than the dwell window won't log.
+4. **Dwell** is already at 1 (logs on first confident recognition) for live.
+5. **Resolution** 1080p is the sweet spot (sharp features without over-paying);
+   640×480 is pixelated and weakens matches.
+
+#### Two more pre-handoff fixes (same day, 2026-06-25)
+- **Duplicate-capture fix (card left in frame too long → logged twice).** Root
+  cause: the engine's dedupe remembered only the *single* last-logged id
+  (`_last_logged`), reset only at pack close. A long hold gives the recognizer a
+  chance to momentarily accept a *different* card (with `stable_frames=1`, one
+  stray frame logs it), which flipped `_last_logged`, after which the held card
+  re-logged. **Fix: `OverlayEngine._recent_logged` is now a set of every id
+  logged into the *current open pack*** — a card can't re-log within the same
+  pack no matter how long it's held or what flickers in between. Cleared on
+  PACK_END / clear; `remove_card` discards the deleted id so a corrected card can
+  be re-scanned. Tests: held-card-once, dedupe-across-a-stray, re-log-after-delete.
+- **Drag-to-repack (move a card to its right pack).** `Session.move_card(index,
+  dest_pack)` moves a logged card by flattened index to a 1-based pack (or the
+  open segment, `None`), **re-labelling both affected packs** (status / variants /
+  checksum) — so fixing a missed boundary makes both packs reconcile to COMPLETE.
+  An emptied source pack is dropped and the rest renumbered. Factored the
+  close-pack labeling into `Session._label(cards)` (now shared by close + relabel;
+  it (re)assigns slot/variant by position). Wired `engine.move_card` →
+  `controller.move_card` → `POST /api/move` → **HTML5 drag-and-drop** on the
+  control table (a ⠿ grip per row; drop onto another pack header/row; polling
+  pauses mid-drag so the table isn't rebuilt under the cursor). Tests:
+  move-relabels-both, move-to-open, empties-source+renumbers, bad-index/no-op.
+- **82 tests green** (was 75; +4 session, +3 engine, +move-endpoint idle check).
+- **Browser overlay (`/overlay`) panels split + made draggable (user request).**
+  The single fixed analytics panel is now **two independent panels** — `#total`
+  (SESSION VALUE) and `#perpack` (PACK ANALYTICS: counts, status breakdown, last
+  pack label) — and **all three panels (ticker / total / per-pack) are now
+  draggable in the browser**, each position remembered per browser source in
+  `localStorage` (`pc_ov_<id>`). `makeDraggable()` switches a panel from its
+  right/bottom CSS default to explicit left/top on first drag, clamped to the
+  viewport. Clean for viewers (drag chrome only shows during an operator drag in
+  OBS *Interact*, never in the captured feed). The cv2 operator overlay
+  (`overlay.py`) was left unchanged — this was scoped to the OBS surface. **83
+  tests green.**
+- **Overlay reverted to ticker + ONE combined analytics panel (user corrected).**
+  The user clarified: keep the *card price ticker* separate, but SESSION VALUE +
+  per-pack stats belong **together**. Re-merged `#total`/`#perpack` back into one
+  draggable `#analytics` panel (ticker still separate; both draggable + persisted).
+- **Control-panel status line fixed (this was the "off-center" gripe all along —
+  it was `/control`, not `/overlay`).** The `COMPLETE/SPEED/NOHIT` breakdown was a
+  tiny grey hint jammed inline in the totals row; moved to its **own line below**
+  the cards/packs/value row and **color-coded** (green/gold/grey, bold counts).
+- **Pack model → explicit Phantasmal format (user gave the authoritative slot
+  breakdown).** `standard_template()` is **4 common (1–4) → 3 uncommon (5–7) →
+  slot 8 reverse holo → slot 9 hit slot (IR/SIR/MHR, else 2nd reverse) → slot 10
+  guaranteed rare+**. Slots 8–9 `expect_rarity=None`; **slot 10 is the rarity
+  anchor (`expect_rarity=RARITY_RARE_PLUS`)** that `_reconcile` enforces (so the
+  guaranteed rare is positional at slot 10, not "anywhere in the block" as a first
+  pass had it). `_label` marks any rare+ card in slots 8–10 (the slot-9 hit, the
+  slot-10 rare) as the hit (holo, `variant=normal`) and non-rare+ cards in 8–9 as
+  reverse holos. Edited packs rearrange to anchor the rare at slot 10. See memory
+  `phantasmal-pack-format`. README "Pack-aware" highlight updated. **88 tests green.**
+- **Refreshed the README control-panel screenshot** (`assets/control.png`) from a
+  headless-Chrome capture of the prefilled demo — shows the pack grouping, the
+  slot-9 SIR hit, the colored status line, drag grips, and exports.
+- **SHIPPED 2026-06-25:** the whole pre-handoff batch was **merged to `main`** and
+  pushed. Branch `handoff-polish` is done. The tool is ready to send to the
+  original requester.
+
 ### Next action when resuming (do this first)
-**Stopping point 2026-06-23 (end of day 2):** all live work is on branch
-`obs-overlay-verify` (in-stream overlay verified in OBS, GUI delete/clear + polish,
-1080p camera fix, dwell=1, docs → wiki). **PR/merge this branch**, then:
-1. **Matcher prefilter** for real recognition speed (~3×; the user wants it faster;
-   lighting helped but the matcher is the ceiling). Test accuracy holds.
+**As of 2026-06-25 everything below is merged to `main` (88 tests green).** The
+pre-handoff polish batch — high-volume export (per-pack CSV), ⚡ Fast (beta)
+matcher prefilter, duplicate-capture fix, drag-to-repack, browser-overlay +
+control-panel layout fixes, the precise Phantasmal pack model, and the README
+demo video + control screenshot — is in. Remaining roadmap (unbuilt):
+1. **Matcher prefilter is built but beta/opt-in** — consider promoting once it's
+   validated on more sets; the exhaustive matcher is still the default.
 2. **SQLite session persistence** (durability + history; basis for pull-rate stats).
-3. **GUI:** end-of-session report view; **drag-to-repack** (move a card between
-   packs — requested); optional live Google-Sheets sync (Sheets API + OAuth).
+3. **GUI:** end-of-session report view; optional live Google-Sheets sync.
 4. **Live label tuning** on a real continuous rip; off-keyboard: fixed phone mount
    + record the speed-rip / fan-hitless styles.
 

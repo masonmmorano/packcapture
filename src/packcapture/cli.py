@@ -88,7 +88,7 @@ def cmd_overlay(args: argparse.Namespace) -> int:
         return run_live_threaded(
             source, args.set, export=args.export, stable_frames=stable,
             min_inliers=args.min_inliers, facecam_frac=args.facecam_frac,
-            reset_layout=args.reset_layout,
+            reset_layout=args.reset_layout, fast=args.fast,
         )
     stable = args.stable_frames if args.stable_frames is not None else 5
     return run(
@@ -112,6 +112,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return serve(
         source, args.set, host=args.host, port=args.port,
         min_inliers=args.min_inliers, stable_frames=stable, export=args.export,
+        fast=args.fast,
     )
 
 
@@ -207,6 +208,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Facecam height as a fraction of frame height; the price block sits below it")
     o.add_argument("--reset-layout", action="store_true",
                    help="Ignore the saved panel layout and start from default positions")
+    o.add_argument("--fast", action="store_true",
+                   help="BETA: faster matcher prefilter (~3x quicker recognition, small "
+                        "accuracy risk); applies to the live --threaded path")
     o.set_defaults(func=cmd_overlay)
 
     g = sub.add_parser("gui",
@@ -227,6 +231,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Recognitions an accepted card must persist before logging (default 2)")
     sv.add_argument("--min-inliers", type=int, default=25,
                     help="Confidence-gate inlier floor (lower for low-res footage)")
+    sv.add_argument("--fast", action="store_true",
+                    help="BETA: faster matcher prefilter (~3x quicker recognition, "
+                         "small accuracy risk)")
     sv.set_defaults(func=cmd_serve)
 
     lc = sub.add_parser("list-cameras",

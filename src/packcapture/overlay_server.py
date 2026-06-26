@@ -90,19 +90,20 @@ PAGE = r"""<!DOCTYPE html>
     color: #ececec; -webkit-font-smoothing: antialiased;
   }
   .panel {
-    position: fixed; right: 40px; width: 520px;
+    position: fixed; cursor: move;
     background: rgba(18,18,18,0.82); border: 1px solid #464646;
     border-radius: 10px; padding: 22px 26px 22px 30px;
     box-shadow: 0 6px 24px rgba(0,0,0,0.45); overflow: hidden;
   }
+  .panel.dragging { outline: 2px dashed rgba(255,210,60,0.65); }
   .panel::before {
     content: ""; position: absolute; left: 0; top: 0; bottom: 0;
     width: 7px; background: var(--grad);
   }
   /* Ticker (top-right, under the facecam) */
-  #ticker { top: 150px; opacity: 0; }
+  #ticker { top: 150px; right: 40px; width: 520px; opacity: 0; }
   #ticker.show { opacity: 1; }
-  #ticker.bump { animation: slideup 0.22s cubic-bezier(.22,1,.36,1); }
+  #ticker.bump { animation: slideup 0.30s cubic-bezier(.22,1,.36,1); }
   @keyframes slideup {
     from { transform: translateY(55px); opacity: 0; }
     to   { transform: translateY(0);    opacity: 1; }
@@ -120,15 +121,15 @@ PAGE = r"""<!DOCTYPE html>
     border-radius: 5px; letter-spacing: 1px;
   }
   #ticker.hit #hit-tag { display: inline-block; }
-  /* Pack analytics (bottom-right) */
-  #analytics { bottom: 40px; }
+  /* Pack analytics — session value + per-pack stats in ONE draggable panel */
+  #analytics { right: 40px; bottom: 40px; width: 460px; }
   #analytics h2 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: .5px; }
   #analytics .setname { color: #9a9a9a; font-size: 15px; margin: 2px 0 14px; letter-spacing: 1px; }
   #analytics .label { color: #9a9a9a; font-size: 15px; letter-spacing: 1px; }
-  #value { font-size: 46px; font-weight: 800; color: #5adc78; }
+  #value { font-size: 46px; font-weight: 800; color: #5adc78; margin-top: 4px; }
   #counts { display: flex; justify-content: space-between; font-size: 20px; margin: 14px 0 4px;
             border-top: 1px solid #333; padding-top: 12px; }
-  #status { display: flex; gap: 22px; font-size: 17px; font-weight: 600; }
+  #status { display: flex; gap: 26px; font-size: 16px; font-weight: 600; margin: 0 0 16px; }
   #status .complete { color: #5adc78; }
   #status .speed { color: #ffd23c; }
   #status .nohit { color: #9a9a9a; }
@@ -147,14 +148,14 @@ PAGE = r"""<!DOCTYPE html>
   <div class="panel" id="analytics">
     <h2>PACK ANALYTICS</h2>
     <div class="setname"></div>
-    <div class="label">SESSION VALUE</div>
-    <div id="value">$0.00</div>
-    <div id="counts"><span><b id="packs">0</b> packs</span><span><b id="cards">0</b> cards</span></div>
     <div id="status">
       <span class="complete">COMPLETE <b id="s-complete">0</b></span>
       <span class="speed">SPEED <b id="s-speed">0</b></span>
       <span class="nohit">NOHIT <b id="s-nohit">0</b></span>
     </div>
+    <div class="label">SESSION VALUE</div>
+    <div id="value">$0.00</div>
+    <div id="counts"><span><b id="packs">0</b> packs</span><span><b id="cards">0</b> cards</span></div>
     <div id="pack-label"></div>
   </div>
 
@@ -193,6 +194,39 @@ PAGE = r"""<!DOCTYPE html>
     set("s-nohit", bs.no_hit || 0);
     set("pack-label", s.last_pack_label || "");
   }
+  // Each panel (ticker / total / per-pack) is independently draggable; the
+  // operator positions them once and the spot is remembered per browser source.
+  var LS = window.localStorage;
+  function makeDraggable(p, key) {
+    var saved = null; try { saved = JSON.parse(LS.getItem(key)); } catch (e) {}
+    if (saved) {
+      p.style.left = saved.x + "px"; p.style.top = saved.y + "px";
+      p.style.right = "auto"; p.style.bottom = "auto";
+    }
+    var grab = null;
+    p.addEventListener("mousedown", function (e) {
+      var r = p.getBoundingClientRect();
+      grab = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+      p.style.left = r.left + "px"; p.style.top = r.top + "px";
+      p.style.right = "auto"; p.style.bottom = "auto";
+      p.classList.add("dragging"); e.preventDefault();
+    });
+    document.addEventListener("mousemove", function (e) {
+      if (!grab) return;
+      var x = Math.max(0, Math.min(e.clientX - grab.dx, window.innerWidth - p.offsetWidth));
+      var y = Math.max(0, Math.min(e.clientY - grab.dy, window.innerHeight - p.offsetHeight));
+      p.style.left = x + "px"; p.style.top = y + "px";
+    });
+    document.addEventListener("mouseup", function () {
+      if (!grab) return;
+      grab = null; p.classList.remove("dragging");
+      LS.setItem(key, JSON.stringify({ x: parseInt(p.style.left, 10), y: parseInt(p.style.top, 10) }));
+    });
+  }
+  ["ticker", "analytics"].forEach(function (id) {
+    makeDraggable(document.getElementById(id), "pc_ov_" + id);
+  });
+
   var es = new EventSource("/events");
   es.onmessage = function (e) { apply(JSON.parse(e.data)); };
 </script>
@@ -232,6 +266,25 @@ def session_csv(cards: list) -> str:
     return buf.getvalue()
 
 
+# One row per pack — the summary view for a high-volume session (216+ packs),
+# where a card-by-card scroll is unwieldy. Built from the analytics report so it
+# carries per-pack status, value and reconciliation. Numeric value sums in Sheets.
+_PACKS_CSV_COLUMNS = ["pack", "status", "reconciled", "cards", "raw_value", "issues"]
+
+
+def session_packs_csv(report: Optional[dict]) -> str:
+    """Serialize per-pack totals (from ``_build_report``) to CSV text."""
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(_PACKS_CSV_COLUMNS)
+    for p in (report or {}).get("packs", []):
+        w.writerow([
+            p["index"], p["status"], int(bool(p["reconciled"])),
+            p["card_count"], p["raw_value"], "; ".join(p.get("issues") or []),
+        ])
+    return buf.getvalue()
+
+
 class RecognitionController:
     """Owns the start/stop lifecycle of a live recognition run for the operator
     GUI. The overlay page and the control page both reflect whatever it's running;
@@ -250,13 +303,15 @@ class RecognitionController:
         self.set_name: Optional[str] = None
         self.source: Optional[str] = None
         self.error: Optional[str] = None
+        self.fast: bool = False
         self._ended = False
 
     @property
     def running(self) -> bool:
         return self._worker is not None
 
-    def start(self, source, set_code, min_inliers: int = 25, stable_frames: int = 1):
+    def start(self, source, set_code, min_inliers: int = 25, stable_frames: int = 1,
+              fast: bool = False):
         with self._lock:
             if self._worker is not None:
                 return False, "already running"
@@ -266,6 +321,7 @@ class RecognitionController:
                 engine, price_map, set_name = build_engine(
                     set_code, boundary_fps=LIVE_RECOG_FPS,
                     min_inliers=min_inliers, stable_frames=stable_frames,
+                    fast=fast,
                 )
             except Exception as e:  # bad/missing bundle
                 self.error = f"set '{set_code}': {e}"
@@ -284,7 +340,7 @@ class RecognitionController:
             ).start()
             self._engine, self._tfs, self._worker = engine, tfs, worker
             self._price_map, self.set_name = price_map, set_name
-            self.set_code, self.source = set_code, str(source)
+            self.set_code, self.source, self.fast = set_code, str(source), fast
             self._pub_stop.clear()
             self._pub_thread = threading.Thread(target=self._publish_loop, name="recog-publish", daemon=True)
             self._pub_thread.start()
@@ -321,16 +377,16 @@ class RecognitionController:
         with self._lock:
             eng = self._engine
             running = self._worker is not None
-            meta = (self.set_code, self.set_name, self.source, self.error, self._ended)
+            meta = (self.set_code, self.set_name, self.source, self.error, self._ended, self.fast)
         if eng is None:
             cards, packs, by_status = [], 0, {}
         else:
             rows, packs, by_status = eng.read_cards()   # lock-safe snapshot
             cards = [_card_row(c, self._price_map, pk, status) for (pk, status, c) in rows]
         value = sum(c["price"] for c in cards if c["price"] is not None)
-        set_code, set_name, source, error, ended = meta
+        set_code, set_name, source, error, ended, fast = meta
         return {
-            "running": running, "ended": ended,
+            "running": running, "ended": ended, "fast": fast,
             "set_code": set_code, "set_name": set_name, "source": source, "error": error,
             "totals": {
                 "cards": len(cards), "packs": packs,
@@ -341,6 +397,9 @@ class RecognitionController:
 
     def remove_card(self, index: int) -> bool:
         return self._engine.remove_card(index) if self._engine is not None else False
+
+    def move_card(self, index: int, dest_pack: Optional[int]) -> bool:
+        return self._engine.move_card(index, dest_pack) if self._engine is not None else False
 
     def clear(self) -> bool:
         if self._engine is None:
@@ -392,13 +451,23 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
   tr.hit td.name::after { content: " HIT"; color: #ffd23c; font-weight: 800; font-size: 12px; }
   button.del { padding: 2px 8px; background: #3a2a2a; border-color: #6f3c3c; color: #ff9a9a; font-weight: 700; }
   button.del:hover { background: #5a2f2f; }
+  tr[draggable="true"] { cursor: grab; }
+  tr.dragging { opacity: .4; }
+  tr.droptgt td { background: rgba(74,222,128,0.14); box-shadow: inset 2px 0 0 #4ade80; }
+  td.grip { color: #5a5d66; width: 14px; text-align: center; cursor: grab; }
   tr.sep td { background: #1f2128; color: #c9c9c9; font-weight: 700; font-size: 13px;
               letter-spacing: .6px; padding: 6px 10px; border-top: 2px solid #3a3d46; }
   tr.sep .pv { color: #5adc78; margin-left: 10px; }
   tr.sep .st-complete { color: #5adc78; } tr.sep .st-speed { color: #ffd23c; } tr.sep .st-open { color: #8ab4ff; }
   .err { color: #ff7a7a; margin: 8px 0; min-height: 16px; }
   .hint { color: #8a8a8a; font-size: 13px; }
+  .status-line { font-size: 15px; letter-spacing: .5px; margin: -4px 0 16px; min-height: 18px; }
+  .status-line .complete { color: #5adc78; } .status-line .speed { color: #ffd23c; } .status-line .nohit { color: #9a9a9a; }
+  .status-line b { font-weight: 800; }
   a { color: #8ab4ff; }
+  label.beta { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer; }
+  label.beta span { font-size: 10px; font-weight: 800; letter-spacing: .5px; color: #1a1a1a;
+                    background: #ffd23c; border-radius: 4px; padding: 1px 5px; }
 </style>
 </head>
 <body>
@@ -409,6 +478,7 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
   <label>Source <input id="source" list="cams" size="12" value="0"
          title="camera index (0) or a video file path"><datalist id="cams"></datalist></label>
   <button id="detect" title="Detect cameras">↻ cameras</button>
+  <label class="beta" title="Beta: a faster matcher prefilter. May be noticeably faster to recognize each card; small chance of a missed or wrong card. Off = the proven exhaustive matcher."><input type="checkbox" id="fast"> ⚡ Fast <span>beta</span></label>
   <button class="go" id="start">Start</button>
   <button class="stop" id="stop" disabled>Stop</button>
   <span class="hint">OBS overlay: <a href="/overlay" target="_blank">/overlay</a>
@@ -420,16 +490,17 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
     <span><b id="t-cards">0</b> cards</span>
     <span><b id="t-packs">0</b> packs</span>
     <span>value <b class="val" id="t-value">$0.00</b></span>
-    <span class="hint" id="t-status"></span>
     <span style="margin-left:auto">
       <button class="stop" id="clear">Clear all</button>
-      <a class="btn" id="csv" href="/api/export.csv">Export CSV</a>
+      <a class="btn" id="csv" href="/api/export.csv" title="One row per card">Cards CSV</a>
+      <a class="btn" id="packscsv" href="/api/export_packs.csv" title="One row per pack: status, value, card count">Packs CSV</a>
       <a class="btn" id="jsonbtn" href="/api/export.json">JSON</a>
     </span>
   </div>
-  <div class="hint" style="margin-bottom:14px">Click ✕ to delete a mis-scan; CSV opens directly in Google Sheets (File → Import) / Excel.</div>
+  <div class="status-line" id="t-status"></div>
+  <div class="hint" style="margin-bottom:14px">Drag a card (⠿) onto another pack to move it; click ✕ to delete a mis-scan. CSV opens directly in Google Sheets (File → Import) / Excel.</div>
   <table>
-    <thead><tr><th>#</th><th>Card</th><th>No.</th><th>Rarity</th><th>Variant</th><th>Price</th><th></th></tr></thead>
+    <thead><tr><th></th><th>#</th><th>Card</th><th>No.</th><th>Rarity</th><th>Variant</th><th>Price</th><th></th></tr></thead>
     <tbody id="rows"></tbody>
   </table>
 </main>
@@ -437,6 +508,7 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
   function el(id){ return document.getElementById(id); }
   var LS = window.localStorage;
   if (LS.getItem("pc_source")) el("source").value = LS.getItem("pc_source");
+  if (LS.getItem("pc_fast") === "1") el("fast").checked = true;
   fetch("/api/sets").then(r=>r.json()).then(function(sets){
     var s = el("set");
     sets.forEach(function(code){ var o=document.createElement("option"); o.value=o.textContent=code; s.appendChild(o); });
@@ -455,8 +527,9 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
   el("start").onclick = function(){
     el("err").textContent = "";
     LS.setItem("pc_set", el("set").value); LS.setItem("pc_source", el("source").value);
+    LS.setItem("pc_fast", el("fast").checked ? "1" : "0");
     fetch("/api/start", { method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ set: el("set").value, source: el("source").value }) })
+      body: JSON.stringify({ set: el("set").value, source: el("source").value, fast: el("fast").checked }) })
       .then(r=>r.json()).then(function(res){ if(!res.ok) el("err").textContent = res.message; });
   };
   el("stop").onclick = function(){ fetch("/api/stop", { method:"POST" }); };
@@ -469,20 +542,58 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
         body: JSON.stringify({ index: idx }) }).then(poll);
     }
   };
-  function statusCounts(bs){ return ["COMPLETE "+(bs.complete||0), "SPEED "+(bs.speed_ripped||0), "NOHIT "+(bs.no_hit||0)].join("   "); }
+  // Drag a card row onto another pack (or the Current-pack header) to move it.
+  // Polling is paused while dragging so the table isn't rebuilt mid-drag.
+  var rowsEl = el("rows"), dragging = false, dragIdx = null;
+  function clearDrop(){ var a = rowsEl.querySelectorAll(".droptgt"); for (var i=0;i<a.length;i++) a[i].classList.remove("droptgt"); }
+  rowsEl.addEventListener("dragstart", function(e){
+    var tr = e.target.closest("tr[data-i]");
+    if (!tr) return;
+    dragIdx = parseInt(tr.getAttribute("data-i"), 10);
+    dragging = true; tr.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", String(dragIdx));   // Firefox needs data set
+  });
+  rowsEl.addEventListener("dragend", function(){
+    dragging = false; dragIdx = null; clearDrop();
+    var d = rowsEl.querySelector(".dragging"); if (d) d.classList.remove("dragging");
+  });
+  rowsEl.addEventListener("dragover", function(e){
+    var tr = e.target.closest("tr[data-pack]");
+    if (!tr || dragIdx === null) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = "move";
+    clearDrop(); tr.classList.add("droptgt");
+  });
+  rowsEl.addEventListener("drop", function(e){
+    var tr = e.target.closest("tr[data-pack]");
+    if (!tr || dragIdx === null) return;
+    e.preventDefault();
+    var dest = tr.getAttribute("data-pack");   // "open" or a 1-based pack number
+    var idx = dragIdx;
+    dragging = false; dragIdx = null; clearDrop();
+    fetch("/api/move", { method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ index: idx, dest_pack: dest }) }).then(poll);
+  });
+  function statusCounts(bs){
+    return "<span class='complete'>COMPLETE <b>"+(bs.complete||0)+"</b></span>&nbsp;&nbsp;&nbsp;"+
+           "<span class='speed'>SPEED <b>"+(bs.speed_ripped||0)+"</b></span>&nbsp;&nbsp;&nbsp;"+
+           "<span class='nohit'>NOHIT <b>"+(bs.no_hit||0)+"</b></span>";
+  }
   function poll(){
+    if (dragging) return;                 // don't rebuild the table mid-drag
     fetch("/api/state").then(r=>r.json()).then(function(s){
       var on = s.running;
       el("dot").className = "dot" + (on ? " on" : "");
-      el("status").textContent = on ? ("running — " + (s.set_name||s.set_code||"") + " @ " + (s.source||""))
+      el("status").textContent = on ? ("running — " + (s.set_name||s.set_code||"") + " @ " + (s.source||"")
+                                       + (s.fast ? "  ⚡ fast (beta)" : ""))
                                      : (s.ended ? "finished" : "idle");
-      el("start").disabled = on; el("stop").disabled = !on;
+      el("start").disabled = on; el("stop").disabled = !on; el("fast").disabled = on;
       if (s.error) el("err").textContent = s.error;
       var t = s.totals || {};
       el("t-cards").textContent = t.cards||0;
       el("t-packs").textContent = t.packs||0;
       el("t-value").textContent = t.value_str||"$0.00";
-      el("t-status").textContent = statusCounts(t.by_status||{});
+      el("t-status").innerHTML = statusCounts(t.by_status||{});
       // Newest first, with a divider row between packs (instead of a pack column).
       var cards = s.cards || [];
       var html = "", lastKey;
@@ -496,10 +607,12 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
           else { label = "Pack " + c.pack; cls = (c.status === "complete") ? "st-complete"
                        : (c.status === "speed_ripped") ? "st-speed" : ""; }
           var stx = (c.status && c.status !== "open") ? " · <span class='"+cls+"'>"+c.status.toUpperCase().replace("_"," ")+"</span>" : "";
-          html += "<tr class='sep'><td colspan='7'>"+label+stx+"</td></tr>";
+          html += "<tr class='sep' data-pack='"+key+"'><td colspan='8'>"+label+stx+"</td></tr>";
         }
         var rc = c.rarity_color || "#e8e8e8";
-        html += "<tr class='"+(c.is_hit?"hit":"")+"'><td>"+(k+1)+"</td><td class='name'>"+c.name+
+        html += "<tr class='"+(c.is_hit?"hit":"")+"' draggable='true' data-i='"+k+"' data-pack='"+key+"'>"+
+                "<td class='grip' title='Drag onto another pack'>⠿</td>"+
+                "<td>"+(k+1)+"</td><td class='name'>"+c.name+
                 "</td><td>"+(c.number||"")+"</td><td style='color:"+rc+"'>"+(c.rarity||"")+
                 "</td><td>"+(c.variant||"")+"</td><td class='price'>"+c.price_str+"</td>"+
                 "<td><button class='del' data-i='"+k+"' title='Delete this card'>✕</button></td></tr>";
@@ -586,7 +699,8 @@ class OverlayServer:
                     except ValueError:
                         data = {}
                     ok, msg = ctl.start(data.get("source", 0), data.get("set", ""),
-                                        min_inliers=int(data.get("min_inliers", 25)))
+                                        min_inliers=int(data.get("min_inliers", 25)),
+                                        fast=bool(data.get("fast", False)))
                     self._json({"ok": ok, "message": msg})
                 elif self.path == "/api/stop":
                     ok, msg = ctl.stop()
@@ -603,6 +717,16 @@ class OverlayServer:
                     except ValueError:
                         data = {}
                     ok = ctl.remove_card(int(data.get("index", -1)))
+                    self._json({"ok": ok})
+                elif self.path == "/api/move":
+                    length = int(self.headers.get("Content-Length") or 0)
+                    try:
+                        data = json.loads(self.rfile.read(length) or b"{}")
+                    except ValueError:
+                        data = {}
+                    dest = data.get("dest_pack", None)
+                    dest = None if dest in (None, "", "open") else int(dest)
+                    ok = ctl.move_card(int(data.get("index", -1)), dest)
                     self._json({"ok": ok})
                 elif self.path == "/api/clear":
                     self._json({"ok": ctl.clear()})
@@ -629,6 +753,12 @@ class OverlayServer:
                     code = (ctl.set_code if ctl and ctl.set_code else "session")
                     fn = f"packcapture_{code}_{time.strftime('%Y%m%d_%H%M%S')}.csv"
                     self._download(session_csv(cards).encode("utf-8"), "text/csv; charset=utf-8", fn)
+                elif self.path.startswith("/api/export_packs.csv"):
+                    ctl = server.controller
+                    report = ctl.build_report(ctl.source) if ctl else None
+                    code = (ctl.set_code if ctl and ctl.set_code else "session")
+                    fn = f"packcapture_{code}_packs_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+                    self._download(session_packs_csv(report).encode("utf-8"), "text/csv; charset=utf-8", fn)
                 elif self.path.startswith("/api/export.json"):
                     ctl = server.controller
                     report = ctl.build_report(ctl.source) if ctl else None
@@ -727,6 +857,7 @@ def serve(
     stable_frames: int = 1,
     export: Optional[str] = None,
     max_seconds: Optional[float] = None,
+    fast: bool = False,
 ) -> int:
     """Auto-start recognition on a fixed source and serve the overlay for OBS.
 
@@ -734,7 +865,8 @@ def serve(
     """
     server = _make_server(host, port)
     ctl = server.controller
-    ok, msg = ctl.start(source, set_code, min_inliers=min_inliers, stable_frames=stable_frames)
+    ok, msg = ctl.start(source, set_code, min_inliers=min_inliers,
+                        stable_frames=stable_frames, fast=fast)
     if not ok:
         print(f"error: {msg}", file=__import__("sys").stderr)
         server.stop()

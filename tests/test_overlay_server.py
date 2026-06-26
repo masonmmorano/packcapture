@@ -10,6 +10,7 @@ from packcapture.overlay_server import (
     RecognitionController,
     _bgr_to_hex,
     session_csv,
+    session_packs_csv,
     state_to_payload,
 )
 
@@ -70,6 +71,21 @@ def test_server_serves_overlay_page():
             body = r.read().decode()
         assert "PACK ANALYTICS" in body
         assert "EventSource(\"/events\")" in body
+    finally:
+        server.stop()
+
+
+def test_overlay_page_has_two_draggable_panels():
+    server = OverlayServer(port=0).start()
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{server._port}/overlay", timeout=2) as r:
+            body = r.read().decode()
+        # Ticker is its own panel; session value + per-pack stats share the
+        # analytics panel. Both are draggable.
+        assert 'id="ticker"' in body and 'id="analytics"' in body
+        assert "SESSION VALUE" in body and "PACK ANALYTICS" in body
+        assert 'id="total"' not in body and 'id="perpack"' not in body
+        assert "makeDraggable" in body and '"ticker", "analytics"' in body
     finally:
         server.stop()
 
@@ -151,6 +167,8 @@ def test_clear_and_delete_endpoints_when_idle():
     try:
         assert _post(server, "/api/clear")["ok"] is False        # no session yet
         assert _post(server, "/api/delete", {"index": 0})["ok"] is False
+        assert _post(server, "/api/move", {"index": 0, "dest_pack": 2})["ok"] is False
+        assert _post(server, "/api/move", {"index": 0, "dest_pack": "open"})["ok"] is False
     finally:
         server.stop()
 
@@ -207,3 +225,74 @@ def test_export_csv_endpoint_serves_downloadable_csv():
         assert body.splitlines()[0].startswith("#,name")   # header even when idle/empty
     finally:
         server.stop()
+
+
+# --- per-pack summary CSV + fast (beta) flag + high-volume export ---
+
+def test_session_packs_csv_rows_and_issues():
+    report = {"packs": [
+        {"index": 1, "status": "complete", "reconciled": True, "card_count": 10,
+         "raw_value": 2.79, "issues": []},
+        {"index": 2, "status": "speed_ripped", "reconciled": False, "card_count": 4,
+         "raw_value": 19.10, "issues": ["boundary likely missed"]},
+    ]}
+    lines = session_packs_csv(report).strip().splitlines()
+    assert lines[0].startswith("pack,status,reconciled,cards,raw_value,issues")
+    assert lines[1].split(",")[:5] == ["1", "complete", "1", "10", "2.79"]
+    assert "boundary likely missed" in lines[2]
+    assert len(lines) == 3
+
+
+def test_session_packs_csv_empty_is_header_only():
+    assert session_packs_csv(None).strip().splitlines()[0].startswith("pack,status")
+
+
+def test_export_packs_csv_endpoint():
+    server = _control_server()
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{server._port}/api/export_packs.csv", timeout=3
+        ) as r:
+            disp = r.headers.get("Content-Disposition")
+            body = r.read().decode()
+        assert "_packs_" in disp and ".csv" in disp
+        assert body.splitlines()[0].startswith("pack,status")   # header even when idle
+    finally:
+        server.stop()
+
+
+def test_operator_state_has_fast_flag_default_false():
+    ctl = RecognitionController(OverlayServer(port=0))
+    assert ctl.operator_state()["fast"] is False
+
+
+def test_export_scales_to_216_packs(monkeypatch, tmp_path):
+    """The CSV exports must handle a full 216-pack session without choking."""
+    from packcapture.overlay import _build_report
+    from packcapture.pipeline.session import Session
+
+    sess = Session("me2")
+    price_map = {}
+    for _ in range(216):
+        for s in range(10):
+            cid = f"me2-{(s % 9) + 1}"
+            price_map[cid] = (0.25, "normal")
+            sess.add(card_id=cid, name=f"Card {s + 1}", number=str(s + 1),
+                     base_rarity="Common", inliers=30)
+        sess.close_pack()
+
+    report = _build_report(sess, price_map, "me2", "Phantasmal Flames", "test")
+    assert report["totals"]["packs"] == 216
+    assert report["totals"]["cards"] == 2160
+
+    packs_lines = session_packs_csv(report).strip().splitlines()
+    assert len(packs_lines) == 217                    # header + 216 packs
+
+    card_rows = [
+        {"name": c["name"], "number": c["number"], "rarity": c["base_rarity"],
+         "variant": c["variant"], "pack": p["index"], "status": p["status"],
+         "price": c["price"], "card_id": c["card_id"]}
+        for p in report["packs"] for c in p["cards"]
+    ]
+    card_lines = session_csv(card_rows).strip().splitlines()
+    assert len(card_lines) == 2161                    # header + 2160 cards
