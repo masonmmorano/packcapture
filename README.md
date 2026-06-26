@@ -71,7 +71,7 @@ In the control panel:
 
 <p align="center">
   <img src="assets/control.png" alt="PackCapture control panel mid-session" width="100%"><br>
-  <sub>The control panel mid-session: a live card log grouped by pack, hits highlighted, with running totals and CSV/JSON export.</sub>
+  <sub>The control panel mid-session: a live card log grouped by pack (drag a card to repack it, ✕ to fix a mis-scan), hits highlighted, with running totals, a COMPLETE / SPEED / NOHIT breakdown, and CSV/JSON export.</sub>
 </p>
 
 ### Show prices on stream (OBS)

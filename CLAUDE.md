@@ -409,17 +409,23 @@ Perceived delay = recognition latency + dwell. Levers, in order of impact:
   slot-10 rare) as the hit (holo, `variant=normal`) and non-rare+ cards in 8–9 as
   reverse holos. Edited packs rearrange to anchor the rare at slot 10. See memory
   `phantasmal-pack-format`. README "Pack-aware" highlight updated. **88 tests green.**
-- All of the above is committed on **`handoff-polish`** and pushed to origin.
+- **Refreshed the README control-panel screenshot** (`assets/control.png`) from a
+  headless-Chrome capture of the prefilled demo — shows the pack grouping, the
+  slot-9 SIR hit, the colored status line, drag grips, and exports.
+- **SHIPPED 2026-06-25:** the whole pre-handoff batch was **merged to `main`** and
+  pushed. Branch `handoff-polish` is done. The tool is ready to send to the
+  original requester.
 
 ### Next action when resuming (do this first)
-**Stopping point 2026-06-23 (end of day 2):** all live work is on branch
-`obs-overlay-verify` (in-stream overlay verified in OBS, GUI delete/clear + polish,
-1080p camera fix, dwell=1, docs → wiki). **PR/merge this branch**, then:
-1. **Matcher prefilter** for real recognition speed (~3×; the user wants it faster;
-   lighting helped but the matcher is the ceiling). Test accuracy holds.
+**As of 2026-06-25 everything below is merged to `main` (88 tests green).** The
+pre-handoff polish batch — high-volume export (per-pack CSV), ⚡ Fast (beta)
+matcher prefilter, duplicate-capture fix, drag-to-repack, browser-overlay +
+control-panel layout fixes, the precise Phantasmal pack model, and the README
+demo video + control screenshot — is in. Remaining roadmap (unbuilt):
+1. **Matcher prefilter is built but beta/opt-in** — consider promoting once it's
+   validated on more sets; the exhaustive matcher is still the default.
 2. **SQLite session persistence** (durability + history; basis for pull-rate stats).
-3. **GUI:** end-of-session report view; **drag-to-repack** (move a card between
-   packs — requested); optional live Google-Sheets sync (Sheets API + OAuth).
+3. **GUI:** end-of-session report view; optional live Google-Sheets sync.
 4. **Live label tuning** on a real continuous rip; off-keyboard: fixed phone mount
    + record the speed-rip / fan-hitless styles.
 
