@@ -91,6 +91,29 @@ def test_each_card_matches_itself(built_bundle, tmp_path):
             assert results[0].inliers > results[1].inliers
 
 
+@pytest.fixture()
+def big_bundle(tmp_path, monkeypatch):
+    """A bundle with more candidates than the prefilter keeps, so the prefilter
+    path (narrow-then-fully-score) is actually exercised."""
+    monkeypatch.setenv("PACKCAPTURE_DATA_DIR", str(tmp_path / "sets"))
+    client = FakeClient(n=40)
+    build_set("fakebig", force=True, client=client)
+    return client
+
+
+def test_prefilter_preserves_top1(big_bundle, tmp_path):
+    bundle = load_bundle("fakebig")
+    full = Matcher(bundle)                      # exhaustive (default)
+    fast = Matcher(bundle, prefilter_top=10)    # beta prefilter, 10 of 40 survive
+    for i in range(40):
+        img = _synth_card(i + 1)
+        rf = full.match_array(img, top=1)
+        rk = fast.match_array(img, top=1)
+        assert rf and rk
+        assert rf[0].card_id == f"fake-{i}"             # exhaustive is correct
+        assert rk[0].card_id == rf[0].card_id           # prefilter keeps the winner
+
+
 def test_empty_query_returns_no_results(built_bundle):
     bundle = load_bundle("fake")
     matcher = Matcher(bundle)

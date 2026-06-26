@@ -36,13 +36,52 @@ class Matcher:
         ratio: float = 0.75,
         refine_top: int = 15,
         use_homography: bool = True,
+        prefilter_top: int = 0,
+        prefilter_qdesc: int = 120,
     ):
         self.bundle = bundle
         self.ratio = ratio
         self.refine_top = refine_top
         self.use_homography = use_homography
+        # Prefilter (opt-in, "fast mode"): when prefilter_top > 0, a cheap first
+        # pass using only the strongest `prefilter_qdesc` query descriptors ranks
+        # all candidates, and the full ratio-test runs on just the top
+        # `prefilter_top`. The dominant cost is the per-candidate knnMatch, which
+        # scales with the number of query descriptors, so cutting it on the full
+        # scan and shrinking the candidate set for the full scan is a ~3x win.
+        # 0 keeps the exhaustive default behavior (every candidate, full qdesc).
+        self.prefilter_top = prefilter_top
+        self.prefilter_qdesc = prefilter_qdesc
         self.orb = create_orb(bundle.orb_nfeatures)
         self.bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+
+    def _good_matches(self, qdesc: np.ndarray, cdesc: Optional[np.ndarray]) -> list:
+        """Lowe-ratio-filtered good matches of query descriptors against one
+        candidate's descriptors."""
+        if cdesc is None or len(cdesc) < 2:
+            return []
+        knn = self.bf.knnMatch(qdesc, cdesc, k=2)
+        return [
+            m for m, n in (p for p in knn if len(p) == 2)
+            if m.distance < self.ratio * n.distance
+        ]
+
+    def _prefilter_candidates(self, qdesc: np.ndarray, qkp: np.ndarray) -> list[int]:
+        """Rank all candidates with a cheap pass (strongest query descriptors
+        only) and return the indices of the top `prefilter_top` to fully score."""
+        # Strongest query descriptors first (response is keypoint column 4),
+        # which are the most repeatable, so they carry the ranking signal.
+        if qkp is not None and len(qkp) == len(qdesc) and len(qdesc) > self.prefilter_qdesc:
+            order = np.argsort(qkp[:, 4])[::-1][: self.prefilter_qdesc]
+            qsub = qdesc[order]
+        else:
+            qsub = qdesc
+        ranked = [
+            (i, len(self._good_matches(qsub, cdesc)))
+            for i, cdesc in enumerate(self.bundle.descriptors)
+        ]
+        ranked.sort(key=lambda t: t[1], reverse=True)
+        return [i for i, _ in ranked[: self.prefilter_top]]
 
     def match_image(self, image_path: Union[str, Path], top: int = 5) -> list[MatchResult]:
         return self.match_array(load_gray(image_path), top=top)
@@ -63,17 +102,17 @@ class Matcher:
         if qdesc is None or len(qdesc) == 0:
             return []
 
-        # Stage 1: ratio-test good-match count against every candidate.
+        # Optional cheap prefilter: narrow to the top candidates before the full
+        # (expensive) ratio-test scan. Off by default -> every candidate.
+        if self.prefilter_top and len(self.bundle.descriptors) > self.prefilter_top:
+            candidates = self._prefilter_candidates(qdesc, qkp)
+        else:
+            candidates = range(len(self.bundle.descriptors))
+
+        # Stage 1: ratio-test good-match count against each (surviving) candidate.
         scored: list[tuple[int, int, list]] = []
-        for i, cdesc in enumerate(self.bundle.descriptors):
-            if cdesc is None or len(cdesc) < 2:
-                scored.append((i, 0, []))
-                continue
-            knn = self.bf.knnMatch(qdesc, cdesc, k=2)
-            good = [
-                m for m, n in (p for p in knn if len(p) == 2)
-                if m.distance < self.ratio * n.distance
-            ]
+        for i in candidates:
+            good = self._good_matches(qdesc, self.bundle.descriptors[i])
             scored.append((i, len(good), good))
 
         scored.sort(key=lambda t: t[1], reverse=True)

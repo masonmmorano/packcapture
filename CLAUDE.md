@@ -315,6 +315,72 @@ ran a bit slow, see below).
   a **matcher prefilter** (cheap rank → RANSAC only top-K) to cut ~337 ms → ~100 ms
   — designed, **offered but not built**.
 
+### Done so far (added 2026-06-25 — pre-handoff polish for the original requester)
+Three asks before the user sends the tool to the person it was built for:
+- **High-volume export (216+ packs).** The per-card CSV (`session_csv`) already
+  streams fine at scale; **added a per-pack summary CSV** (`session_packs_csv` +
+  `GET /api/export_packs.csv` + a **Packs CSV** button on the control page): one
+  row per pack (pack #, status, reconciled, cards, raw_value, issues) for when a
+  card-by-card scroll of 2,000+ rows is unwieldy. Stayed **dependency-free** (no
+  openpyxl/xlsx — user was fine skipping Excel since CSV opens in Excel/Sheets).
+  Stress-tested: a synthetic **216-pack / 2,160-card** session → 217-row packs CSV
+  + 2,161-row cards CSV, no issue (`test_export_scales_to_216_packs`).
+- **Matcher prefilter as opt-in "⚡ Fast (beta)" mode** (the live-latency lever).
+  `Matcher(prefilter_top=N)`: a cheap first pass using only the strongest
+  `prefilter_qdesc` (120) query descriptors ranks all candidates, then the full
+  ratio-test+RANSAC runs on just the top `N` (`FAST_PREFILTER_TOP=25` of me2's
+  130). **Off by default** (exhaustive matcher stays the default everywhere);
+  threaded through `build_engine(fast=)` → `RecognitionController.start(fast=)` →
+  `/api/start` + a **control-page checkbox** (persisted in localStorage), plus
+  `--fast` on `overlay --threaded` and `serve`. **Benchmarked on the real me2
+  bundle: 316 ms → 145 ms/match (~2.2×), 25/25 top-1 agreement** with exhaustive
+  (accuracy held perfectly on the sample). `test_prefilter_preserves_top1`.
+- **Ticker slide slowed 0.22 s → 0.30 s** (user: the 0.22 s snap was a touch
+  jarring) in both renderers — cv2 `TICKER_ANIM_S` and the browser `/overlay` CSS.
+- **README: live demo video.** Added a "See it in action" section — a clickable
+  YouTube thumbnail (`maxresdefault`) linking the user's 1-min one-pack-rip demo
+  (`youtube.com/watch?v=h8b6s0PN_vs`). GitHub can't embed a YT player; thumbnail →
+  link is the standard.
+- **75 tests green.** (Note: a new OBS recording landed at
+  `scratch/footage/2026-06-23 18-31-05.mp4`.)
+
+#### Live latency — how it works best (the user's "make notes" ask)
+Perceived delay = recognition latency + dwell. Levers, in order of impact:
+1. **Lighting** is the biggest practical lever — poor light → weak/missed ORB
+   matches → re-tries → apparent lag. Bright, even, glare-free light first.
+2. **⚡ Fast (beta)** ~halves the matcher time (316→145 ms here). Default-off
+   because it's a heuristic narrowing; on me2 it matched exhaustive 25/25, but
+   verify on a new set before trusting it for a real session.
+3. **Hold each card ~1 s, steady** — recognition samples ~3–7×/s; a card flashed
+   faster than the dwell window won't log.
+4. **Dwell** is already at 1 (logs on first confident recognition) for live.
+5. **Resolution** 1080p is the sweet spot (sharp features without over-paying);
+   640×480 is pixelated and weakens matches.
+
+#### Two more pre-handoff fixes (same day, 2026-06-25)
+- **Duplicate-capture fix (card left in frame too long → logged twice).** Root
+  cause: the engine's dedupe remembered only the *single* last-logged id
+  (`_last_logged`), reset only at pack close. A long hold gives the recognizer a
+  chance to momentarily accept a *different* card (with `stable_frames=1`, one
+  stray frame logs it), which flipped `_last_logged`, after which the held card
+  re-logged. **Fix: `OverlayEngine._recent_logged` is now a set of every id
+  logged into the *current open pack*** — a card can't re-log within the same
+  pack no matter how long it's held or what flickers in between. Cleared on
+  PACK_END / clear; `remove_card` discards the deleted id so a corrected card can
+  be re-scanned. Tests: held-card-once, dedupe-across-a-stray, re-log-after-delete.
+- **Drag-to-repack (move a card to its right pack).** `Session.move_card(index,
+  dest_pack)` moves a logged card by flattened index to a 1-based pack (or the
+  open segment, `None`), **re-labelling both affected packs** (status / variants /
+  checksum) — so fixing a missed boundary makes both packs reconcile to COMPLETE.
+  An emptied source pack is dropped and the rest renumbered. Factored the
+  close-pack labeling into `Session._label(cards)` (now shared by close + relabel;
+  it (re)assigns slot/variant by position). Wired `engine.move_card` →
+  `controller.move_card` → `POST /api/move` → **HTML5 drag-and-drop** on the
+  control table (a ⠿ grip per row; drop onto another pack header/row; polling
+  pauses mid-drag so the table isn't rebuilt under the cursor). Tests:
+  move-relabels-both, move-to-open, empties-source+renumbers, bad-index/no-op.
+- **82 tests green** (was 75; +4 session, +3 engine, +move-endpoint idle check).
+
 ### Next action when resuming (do this first)
 **Stopping point 2026-06-23 (end of day 2):** all live work is on branch
 `obs-overlay-verify` (in-stream overlay verified in OBS, GUI delete/clear + polish,

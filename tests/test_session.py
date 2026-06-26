@@ -162,3 +162,55 @@ def test_remove_card_by_flattened_index_and_clear():
 
     s.clear()
     assert s.packs == [] and s.pending == 0
+
+
+def test_move_card_between_packs_relabels_both():
+    # A boundary fired one card early: pack 1 got 11 cards (its slot-10 rare plus
+    # pack 2's rare), pack 2 got 9 (missing its rare). Moving the stray rare to
+    # pack 2 should make both reconcile as COMPLETE.
+    s = Session("me2")
+    _add_all(s, CLEAN_PACK)                                     # 10, reconcilable
+    s.add(card_id="rare2", name="rare2", number="1", base_rarity="Double Rare")  # 11th
+    s.close_pack()                                              # pack 1: 11 cards
+    _add_all(s, CLEAN_PACK[:-1])                                # pack 2: 9 (no rare)
+    s.close_pack()
+    assert len(s.packs[0].cards) == 11 and len(s.packs[1].cards) == 9
+    assert s.packs[0].status != STATUS_COMPLETE                # over-full, flagged
+
+    # Flattened index of the stray (last card of pack 1) = 10.
+    assert s.move_card(10, 2) is True
+    assert len(s.packs[0].cards) == 10 and len(s.packs[1].cards) == 10
+    assert s.packs[0].status == STATUS_COMPLETE                # both reconcile now
+    assert s.packs[1].status == STATUS_COMPLETE
+
+
+def test_move_card_to_open_segment():
+    s = Session("me2")
+    s.add(card_id="a", name="A", number="1", base_rarity="Common")
+    s.add(card_id="b", name="B", number="2", base_rarity="Common")
+    s.close_pack()                                             # pack 1: [a, b]
+    assert s.move_card(0, None) is True                       # move a -> open segment
+    assert [c.card_id for c in s.packs[0].cards] == ["b"]
+    assert [c.card_id for c in s._current] == ["a"]
+
+
+def test_move_card_empties_source_pack_and_renumbers():
+    s = Session("me2")
+    s.add(card_id="solo", name="Solo", number="1", base_rarity="Common")
+    s.close_pack()                                             # pack 1: [solo]
+    s.add(card_id="x", name="X", number="2", base_rarity="Common")
+    s.close_pack()                                             # pack 2: [x]
+    assert len(s.packs) == 2
+    assert s.move_card(0, 2) is True                          # empties pack 1
+    assert len(s.packs) == 1                                  # dropped
+    assert s.packs[0].index == 1                              # renumbered
+    assert [c.card_id for c in s.packs[0].cards] == ["x", "solo"]
+
+
+def test_move_card_bad_index_or_noop():
+    s = Session("me2")
+    s.add(card_id="a", name="A", number="1", base_rarity="Common")
+    s.close_pack()
+    assert s.move_card(9, 1) is False                         # bad index
+    assert s.move_card(0, 1) is False                         # already in pack 1 (no-op)
+    assert s.move_card(0, 5) is False                         # bad destination

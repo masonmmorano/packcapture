@@ -198,6 +198,31 @@ class Session:
             return None
         cards = self._current
         self._current = []
+        status, reconciled, issues = self._label(cards)
+        pack = Pack(
+            index=len(self.packs) + 1,
+            cards=cards,
+            status=status,
+            reconciled=reconciled,
+            issues=issues,
+        )
+        self.packs.append(pack)
+        return pack
+
+    def _label(self, cards: list[LoggedCard]) -> tuple[str, bool, list[str]]:
+        """Assign provisional slot/variant by position and derive a pack's
+        status, reconciliation and issues from its cards.
+
+        Used both when a pack closes and when an edit (delete / move) changes a
+        pack's contents, so an edited pack re-checksums against the template.
+        """
+        for i, c in enumerate(cards):
+            c.slot = i + 1
+            if i < self.pack_size:
+                slot = self.template[i]
+                c.variant, c.is_holo = slot.variant, slot.variant == VARIANT_REVERSE
+            else:
+                c.variant, c.is_holo = VARIANT_UNKNOWN, False
 
         issues: list[str] = []
         if len(cards) == self.pack_size:
@@ -212,8 +237,7 @@ class Session:
         if not reconciled:
             # Factory order can't be trusted; don't guess variants.
             for c in cards:
-                c.variant = VARIANT_UNKNOWN
-                c.is_holo = False
+                c.variant, c.is_holo = VARIANT_UNKNOWN, False
 
         if reconciled:
             status = STATUS_COMPLETE
@@ -221,16 +245,62 @@ class Session:
             status = STATUS_SPEED_RIPPED
         else:
             status = STATUS_NO_HIT
+        return status, reconciled, issues
 
-        pack = Pack(
-            index=len(self.packs) + 1,
-            cards=cards,
-            status=status,
-            reconciled=reconciled,
-            issues=issues,
-        )
-        self.packs.append(pack)
-        return pack
+    def move_card(self, index: int, dest_pack: Optional[int]) -> bool:
+        """Move a logged card to a different pack — for fixing a missed boundary.
+
+        ``index`` is the flattened position (closed packs in order, then the open
+        segment, matching :meth:`remove_card`); ``dest_pack`` is a 1-based pack
+        index, or ``None`` for the open segment. The card is appended to the
+        destination, the source and destination packs are re-labelled, and a
+        source pack left empty is dropped and the rest renumbered. Returns False
+        on a bad index or a no-op (already in that container).
+        """
+        i = index
+        src_list: Optional[list[LoggedCard]] = None
+        src_pack: Optional[Pack] = None
+        for pack in self.packs:
+            if i < len(pack.cards):
+                src_list, src_pack = pack.cards, pack
+                break
+            i -= len(pack.cards)
+        else:
+            if 0 <= i < len(self._current):
+                src_list = self._current
+            else:
+                return False
+
+        if dest_pack is None:
+            dest_list, dest_pack_obj = self._current, None
+        elif 1 <= dest_pack <= len(self.packs):
+            dest_pack_obj = self.packs[dest_pack - 1]
+            dest_list = dest_pack_obj.cards
+        else:
+            return False
+
+        if dest_list is src_list:
+            return False  # already in that container — nothing to move
+
+        card = src_list.pop(i)
+        dest_list.append(card)
+
+        if src_pack is not None and not src_pack.cards:
+            self.packs.remove(src_pack)
+            self._renumber()
+            src_pack = None
+        if src_pack is not None:
+            self._relabel(src_pack)
+        if dest_pack_obj is not None:
+            self._relabel(dest_pack_obj)
+        return True
+
+    def _relabel(self, pack: Pack) -> None:
+        pack.status, pack.reconciled, pack.issues = self._label(pack.cards)
+
+    def _renumber(self) -> None:
+        for n, pack in enumerate(self.packs, 1):
+            pack.index = n
 
     def finalize(self) -> Optional[Pack]:
         """End the session: close any open segment. Returns it if one was open."""

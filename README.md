@@ -22,6 +22,15 @@
 > cards from a camera, a price overlay for OBS, an operator control panel, and
 > CSV/JSON export. A persistent session database and pull-rate analytics are next.
 
+## See it in action
+
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=h8b6s0PN_vs">
+    <img src="https://img.youtube.com/vi/h8b6s0PN_vs/maxresdefault.jpg" alt="Watch a live one-pack rip recognized in real time" width="75%">
+  </a><br>
+  <sub>▶ <b><a href="https://www.youtube.com/watch?v=h8b6s0PN_vs">Watch a one-pack rip</a></b> — cards recognized, priced, and logged live with the in-stream overlay.</sub>
+</p>
+
 ## Highlights
 
 <img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Offline & set-locked** — recognition searches one set's ~100–400 cards, no network at match time.<br>
