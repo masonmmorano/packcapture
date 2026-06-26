@@ -399,12 +399,15 @@ Perceived delay = recognition latency + dwell. Levers, in order of impact:
   it was `/control`, not `/overlay`).** The `COMPLETE/SPEED/NOHIT` breakdown was a
   tiny grey hint jammed inline in the totals row; moved to its **own line below**
   the cards/packs/value row and **color-coded** (green/gold/grey, bold counts).
-- **Pack model → explicit Phantasmal format (user spec).** `standard_template()`
-  is now **4 commons → 3 uncommons → a 3-card premium block** (slots 8–10,
-  `expect_rarity=None`, `VARIANT_REVERSE`): 2 reverse holos + the guaranteed
-  rare/hit, which may sit in **any** of the last 3 slots. `_label` marks the rare+
-  card in the block as the hit (holo, `variant=normal`) and the rest as reverse;
-  a full pack now must contain ≥1 rare+ to earn COMPLETE. See memory
+- **Pack model → explicit Phantasmal format (user gave the authoritative slot
+  breakdown).** `standard_template()` is **4 common (1–4) → 3 uncommon (5–7) →
+  slot 8 reverse holo → slot 9 hit slot (IR/SIR/MHR, else 2nd reverse) → slot 10
+  guaranteed rare+**. Slots 8–9 `expect_rarity=None`; **slot 10 is the rarity
+  anchor (`expect_rarity=RARITY_RARE_PLUS`)** that `_reconcile` enforces (so the
+  guaranteed rare is positional at slot 10, not "anywhere in the block" as a first
+  pass had it). `_label` marks any rare+ card in slots 8–10 (the slot-9 hit, the
+  slot-10 rare) as the hit (holo, `variant=normal`) and non-rare+ cards in 8–9 as
+  reverse holos. Edited packs rearrange to anchor the rare at slot 10. See memory
   `phantasmal-pack-format`. README "Pack-aware" highlight updated. **88 tests green.**
 - All of the above is committed on **`handoff-polish`** and pushed to origin.
 

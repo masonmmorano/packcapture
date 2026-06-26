@@ -39,11 +39,12 @@ def test_rarity_class_buckets():
 
 
 def test_template_shape():
-    # 4 commons, 3 uncommons, then a 3-card premium block (reverse / hit / rare).
+    # 4 commons, 3 uncommons, then slot 8 reverse, slot 9 hit-or-reverse,
+    # slot 10 the guaranteed rare+.
     t = standard_template()
     assert len(t) == 10
     assert [s.variant for s in t] == [VARIANT_NORMAL] * 7 + [VARIANT_REVERSE] * 3
-    assert [s.expect_rarity for s in t[7:]] == [None, None, None]   # premium block: any rarity
+    assert [s.expect_rarity for s in t[7:]] == [None, None, RARITY_RARE_PLUS]
 
 
 def test_full_pack_without_a_rare_is_not_complete():
@@ -58,9 +59,10 @@ def test_full_pack_without_a_rare_is_not_complete():
     assert any("rare" in i.lower() for i in pack.issues)
 
 
-def test_rare_can_sit_anywhere_in_the_premium_block():
-    # The guaranteed rare need not be the very last card; a valid composition
-    # completes via an edit and labels the rare as the hit, the rest reverse.
+def test_edited_pack_completes_and_labels_rare_as_hit():
+    # Drag a valid composition (incl. a rare) into a pack in any order; it
+    # rearranges to the template, reconciles, and labels the rare as the hit
+    # (a holo) with the other two premium cards as reverse holos.
     s = Session("me2")
     _add_all(s, [("c1", "Common"), ("c2", "Common"), ("c3", "Common"), ("c4", "Common"),
                  ("u1", "Uncommon"), ("u2", "Uncommon"), ("u3", "Uncommon"),

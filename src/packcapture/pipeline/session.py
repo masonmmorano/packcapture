@@ -17,13 +17,13 @@ A segment with zero recognized cards is not counted as a pack at all (the
 counter.
 
 The old 10-card checksum + variant-by-position logic is retained — it is what
-*earns* the ``COMPLETE`` label. A pack is 4 commons, 3 uncommons, then a 3-card
-"premium" block at the end: 2 reverse holos plus the guaranteed rare-or-better
-(the hit). ORB tells us *which* card a slot holds and the bundle gives its base
-rarity, but position is the only reliable signal for the reverse holos (a reverse
-holo can be any base rarity). Position is only trustworthy when the whole pack
-was flipped in factory order, so packs that close at any other count get
-``variant="unknown"`` rather than a guess.
+*earns* the ``COMPLETE`` label. A pack is 4 commons, 3 uncommons, then 3 premium
+slots: slot 8 a reverse holo, slot 9 the hit slot (a secret rare, or a 2nd
+reverse holo), and slot 10 the guaranteed rare-or-better. ORB tells us *which*
+card a slot holds and the bundle gives its base rarity, but position is the only
+reliable signal for the reverse holos (a reverse holo can be any base rarity).
+Position is only trustworthy when the whole pack was flipped in factory order, so
+packs that close at any other count get ``variant="unknown"`` rather than a guess.
 
 The slot template is configurable per set (a few sets / promo configs differ);
 `standard_template()` is the common 10-card layout used by me2.
@@ -82,20 +82,27 @@ class Slot:
 
 
 def standard_template() -> list[Slot]:
-    """Phantasmal Flames (and the common modern) 10-card layout:
+    """Phantasmal Flames (`me2`) 10-card layout, by slot:
 
-        4 commons → 3 uncommons → 3 "premium" cards at the end.
+      * **1-4** common (circle)
+      * **5-7** uncommon (diamond)
+      * **8**  guaranteed *standard reverse holo* (any base rarity)
+      * **9**  the *hit* slot — Illustration / Special Illustration / Mega Hyper
+               Rare; if no secret rare, it defaults to a 2nd reverse holo
+      * **10** guaranteed *rare-or-better* (a holo Rare by default; upgrades to a
+               Double Rare / ex or a textured Ultra Rare / Full Art)
 
-    The last three are the good slots: 2 reverse holos (any base rarity) plus the
-    guaranteed rare-or-better (the hit). The rare can land in any of those three
-    slots, so they form one block (``expect_rarity=None``) rather than a fixed
-    "reverse, reverse, rare" order. At label time the rare+ card in the block is
-    the hit (a holo) and the others are reverse holos. A full pack still must
-    contain at least one rare+ to earn COMPLETE.
+    Slots 8-9 accept any base rarity (``expect_rarity=None``) because a reverse
+    holo can be any rarity and slot 9 may carry a chase hit; slot 10 is the rarity
+    anchor that *must* be rare+. At label time, a rare+ card in this block (the
+    slot-9 hit, the slot-10 rare) is marked the hit (a holo); a non-rare+ card in
+    slots 8-9 is a reverse holo.
     """
     slots = [Slot(i, VARIANT_NORMAL, RARITY_COMMON) for i in range(1, 5)]      # 1-4 commons
     slots += [Slot(i, VARIANT_NORMAL, RARITY_UNCOMMON) for i in range(5, 8)]   # 5-7 uncommons
-    slots += [Slot(i, VARIANT_REVERSE, None) for i in range(8, 11)]            # 8-10 premium block
+    slots += [Slot(8, VARIANT_REVERSE, None)]                                  # 8  reverse holo
+    slots += [Slot(9, VARIANT_REVERSE, None)]                                  # 9  hit, or 2nd reverse
+    slots.append(Slot(10, VARIANT_REVERSE, RARITY_RARE_PLUS))                  # 10 guaranteed rare+
     return slots
 
 
@@ -249,11 +256,9 @@ class Session:
 
         issues: list[str] = []
         if len(cards) == self.pack_size:
+            # Slot 10 expects rare+, so _reconcile already enforces the guaranteed
+            # rare; slots 8-9 (reverse / hit) accept any base rarity.
             issues = self._reconcile(cards)
-            # Every pack guarantees a rare-or-better somewhere in the premium
-            # block — a full pack without one didn't flip cleanly.
-            if not any(rarity_class(c.base_rarity) == RARITY_RARE_PLUS for c in cards):
-                issues.append("no rare-or-better card — every pack guarantees a hit/rare in the last 3 slots")
         elif len(cards) > self.pack_size:
             # More cards than a pack holds = a missed boundary; surface it.
             issues.append(
