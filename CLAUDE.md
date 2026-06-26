@@ -380,6 +380,17 @@ Perceived delay = recognition latency + dwell. Levers, in order of impact:
   pauses mid-drag so the table isn't rebuilt under the cursor). Tests:
   move-relabels-both, move-to-open, empties-source+renumbers, bad-index/no-op.
 - **82 tests green** (was 75; +4 session, +3 engine, +move-endpoint idle check).
+- **Browser overlay (`/overlay`) panels split + made draggable (user request).**
+  The single fixed analytics panel is now **two independent panels** — `#total`
+  (SESSION VALUE) and `#perpack` (PACK ANALYTICS: counts, status breakdown, last
+  pack label) — and **all three panels (ticker / total / per-pack) are now
+  draggable in the browser**, each position remembered per browser source in
+  `localStorage` (`pc_ov_<id>`). `makeDraggable()` switches a panel from its
+  right/bottom CSS default to explicit left/top on first drag, clamped to the
+  viewport. Clean for viewers (drag chrome only shows during an operator drag in
+  OBS *Interact*, never in the captured feed). The cv2 operator overlay
+  (`overlay.py`) was left unchanged — this was scoped to the OBS surface. **83
+  tests green.**
 
 ### Next action when resuming (do this first)
 **Stopping point 2026-06-23 (end of day 2):** all live work is on branch

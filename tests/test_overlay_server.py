@@ -75,6 +75,20 @@ def test_server_serves_overlay_page():
         server.stop()
 
 
+def test_overlay_page_has_split_draggable_panels():
+    server = OverlayServer(port=0).start()
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{server._port}/overlay", timeout=2) as r:
+            body = r.read().decode()
+        # Total and per-pack are now separate panels, all three draggable.
+        assert 'id="total"' in body and 'id="perpack"' in body
+        assert "SESSION VALUE" in body
+        assert "makeDraggable" in body and "pc_ov_" in body
+        assert '"ticker", "total", "perpack"' in body
+    finally:
+        server.stop()
+
+
 def test_publish_dedupes_and_bumps_seq():
     server = OverlayServer(port=0)
     st = OverlayState(set_name="Set", card_name="Oddish", count=1)

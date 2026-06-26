@@ -90,17 +90,18 @@ PAGE = r"""<!DOCTYPE html>
     color: #ececec; -webkit-font-smoothing: antialiased;
   }
   .panel {
-    position: fixed; right: 40px; width: 520px;
+    position: fixed; cursor: move;
     background: rgba(18,18,18,0.82); border: 1px solid #464646;
     border-radius: 10px; padding: 22px 26px 22px 30px;
     box-shadow: 0 6px 24px rgba(0,0,0,0.45); overflow: hidden;
   }
+  .panel.dragging { outline: 2px dashed rgba(255,210,60,0.65); }
   .panel::before {
     content: ""; position: absolute; left: 0; top: 0; bottom: 0;
     width: 7px; background: var(--grad);
   }
   /* Ticker (top-right, under the facecam) */
-  #ticker { top: 150px; opacity: 0; }
+  #ticker { top: 150px; right: 40px; width: 520px; opacity: 0; }
   #ticker.show { opacity: 1; }
   #ticker.bump { animation: slideup 0.30s cubic-bezier(.22,1,.36,1); }
   @keyframes slideup {
@@ -120,12 +121,14 @@ PAGE = r"""<!DOCTYPE html>
     border-radius: 5px; letter-spacing: 1px;
   }
   #ticker.hit #hit-tag { display: inline-block; }
-  /* Pack analytics (bottom-right) */
-  #analytics { bottom: 40px; }
-  #analytics h2 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: .5px; }
-  #analytics .setname { color: #9a9a9a; font-size: 15px; margin: 2px 0 14px; letter-spacing: 1px; }
-  #analytics .label { color: #9a9a9a; font-size: 15px; letter-spacing: 1px; }
-  #value { font-size: 46px; font-weight: 800; color: #5adc78; }
+  /* Session total — its own draggable panel */
+  #total { right: 40px; bottom: 330px; width: 300px; }
+  #total .label { color: #9a9a9a; font-size: 15px; letter-spacing: 1px; }
+  #value { font-size: 46px; font-weight: 800; color: #5adc78; margin-top: 4px; }
+  /* Pack analytics — its own draggable panel */
+  #perpack { right: 40px; bottom: 40px; width: 460px; }
+  #perpack h2 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: .5px; }
+  #perpack .setname { color: #9a9a9a; font-size: 15px; margin: 2px 0 14px; letter-spacing: 1px; }
   #counts { display: flex; justify-content: space-between; font-size: 20px; margin: 14px 0 4px;
             border-top: 1px solid #333; padding-top: 12px; }
   #status { display: flex; gap: 22px; font-size: 17px; font-weight: 600; }
@@ -144,11 +147,14 @@ PAGE = r"""<!DOCTYPE html>
     <div id="price"><span class="amt"></span><span class="raw">RAW</span></div>
   </div>
 
-  <div class="panel" id="analytics">
-    <h2>PACK ANALYTICS</h2>
-    <div class="setname"></div>
+  <div class="panel" id="total">
     <div class="label">SESSION VALUE</div>
     <div id="value">$0.00</div>
+  </div>
+
+  <div class="panel" id="perpack">
+    <h2>PACK ANALYTICS</h2>
+    <div class="setname"></div>
     <div id="counts"><span><b id="packs">0</b> packs</span><span><b id="cards">0</b> cards</span></div>
     <div id="status">
       <span class="complete">COMPLETE <b id="s-complete">0</b></span>
@@ -183,7 +189,7 @@ PAGE = r"""<!DOCTYPE html>
       }
     }
     // Analytics
-    document.querySelector("#analytics .setname").textContent = (s.set_name || "").toUpperCase();
+    document.querySelector("#perpack .setname").textContent = (s.set_name || "").toUpperCase();
     set("value", s.total_str);
     set("packs", s.packs);
     set("cards", s.count);
@@ -193,6 +199,39 @@ PAGE = r"""<!DOCTYPE html>
     set("s-nohit", bs.no_hit || 0);
     set("pack-label", s.last_pack_label || "");
   }
+  // Each panel (ticker / total / per-pack) is independently draggable; the
+  // operator positions them once and the spot is remembered per browser source.
+  var LS = window.localStorage;
+  function makeDraggable(p, key) {
+    var saved = null; try { saved = JSON.parse(LS.getItem(key)); } catch (e) {}
+    if (saved) {
+      p.style.left = saved.x + "px"; p.style.top = saved.y + "px";
+      p.style.right = "auto"; p.style.bottom = "auto";
+    }
+    var grab = null;
+    p.addEventListener("mousedown", function (e) {
+      var r = p.getBoundingClientRect();
+      grab = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+      p.style.left = r.left + "px"; p.style.top = r.top + "px";
+      p.style.right = "auto"; p.style.bottom = "auto";
+      p.classList.add("dragging"); e.preventDefault();
+    });
+    document.addEventListener("mousemove", function (e) {
+      if (!grab) return;
+      var x = Math.max(0, Math.min(e.clientX - grab.dx, window.innerWidth - p.offsetWidth));
+      var y = Math.max(0, Math.min(e.clientY - grab.dy, window.innerHeight - p.offsetHeight));
+      p.style.left = x + "px"; p.style.top = y + "px";
+    });
+    document.addEventListener("mouseup", function () {
+      if (!grab) return;
+      grab = null; p.classList.remove("dragging");
+      LS.setItem(key, JSON.stringify({ x: parseInt(p.style.left, 10), y: parseInt(p.style.top, 10) }));
+    });
+  }
+  ["ticker", "total", "perpack"].forEach(function (id) {
+    makeDraggable(document.getElementById(id), "pc_ov_" + id);
+  });
+
   var es = new EventSource("/events");
   es.onmessage = function (e) { apply(JSON.parse(e.data)); };
 </script>
