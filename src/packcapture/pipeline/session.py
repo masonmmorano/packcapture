@@ -17,11 +17,13 @@ A segment with zero recognized cards is not counted as a pack at all (the
 counter.
 
 The old 10-card checksum + variant-by-position logic is retained — it is what
-*earns* the ``COMPLETE`` label. ORB tells us *which* card a slot holds and the
-bundle gives its base rarity, but position is the only reliable signal for the
-two reverse-holo slots (a reverse holo can be any base rarity). Position is
-only trustworthy when the whole pack was flipped in factory order, so packs
-that close at any other count get ``variant="unknown"`` rather than a guess.
+*earns* the ``COMPLETE`` label. A pack is 4 commons, 3 uncommons, then a 3-card
+"premium" block at the end: 2 reverse holos plus the guaranteed rare-or-better
+(the hit). ORB tells us *which* card a slot holds and the bundle gives its base
+rarity, but position is the only reliable signal for the reverse holos (a reverse
+holo can be any base rarity). Position is only trustworthy when the whole pack
+was flipped in factory order, so packs that close at any other count get
+``variant="unknown"`` rather than a guess.
 
 The slot template is configurable per set (a few sets / promo configs differ);
 `standard_template()` is the common 10-card layout used by me2.
@@ -80,11 +82,20 @@ class Slot:
 
 
 def standard_template() -> list[Slot]:
-    """The common modern 10-card layout: 4 commons, 3 uncommons, 2 reverses, 1 rare+."""
-    slots = [Slot(i, VARIANT_NORMAL, RARITY_COMMON) for i in range(1, 5)]      # 1-4
-    slots += [Slot(i, VARIANT_NORMAL, RARITY_UNCOMMON) for i in range(5, 8)]   # 5-7
-    slots += [Slot(i, VARIANT_REVERSE, None) for i in range(8, 10)]            # 8-9 (any rarity)
-    slots.append(Slot(10, VARIANT_NORMAL, RARITY_RARE_PLUS))                   # 10
+    """Phantasmal Flames (and the common modern) 10-card layout:
+
+        4 commons → 3 uncommons → 3 "premium" cards at the end.
+
+    The last three are the good slots: 2 reverse holos (any base rarity) plus the
+    guaranteed rare-or-better (the hit). The rare can land in any of those three
+    slots, so they form one block (``expect_rarity=None``) rather than a fixed
+    "reverse, reverse, rare" order. At label time the rare+ card in the block is
+    the hit (a holo) and the others are reverse holos. A full pack still must
+    contain at least one rare+ to earn COMPLETE.
+    """
+    slots = [Slot(i, VARIANT_NORMAL, RARITY_COMMON) for i in range(1, 5)]      # 1-4 commons
+    slots += [Slot(i, VARIANT_NORMAL, RARITY_UNCOMMON) for i in range(5, 8)]   # 5-7 uncommons
+    slots += [Slot(i, VARIANT_REVERSE, None) for i in range(8, 11)]            # 8-10 premium block
     return slots
 
 
@@ -141,6 +152,11 @@ class Session:
         for pack in self.packs:
             if i < len(pack.cards):
                 del pack.cards[i]
+                if not pack.cards:               # emptied -> drop it, renumber the rest
+                    self.packs.remove(pack)
+                    self._renumber()
+                else:
+                    self._relabel(pack)          # status may change (e.g. no longer 10)
                 return True
             i -= len(pack.cards)
         if 0 <= i < len(self._current):
@@ -218,15 +234,26 @@ class Session:
         """
         for i, c in enumerate(cards):
             c.slot = i + 1
-            if i < self.pack_size:
-                slot = self.template[i]
-                c.variant, c.is_holo = slot.variant, slot.variant == VARIANT_REVERSE
-            else:
+            slot = self.template[i] if i < self.pack_size else None
+            if slot is None:
                 c.variant, c.is_holo = VARIANT_UNKNOWN, False
+            elif slot.variant == VARIANT_REVERSE:
+                # Premium block (last 3): the rare+ card is the hit (a holo, not a
+                # reverse); the others are reverse holos.
+                if rarity_class(c.base_rarity) == RARITY_RARE_PLUS:
+                    c.variant, c.is_holo = VARIANT_NORMAL, True
+                else:
+                    c.variant, c.is_holo = VARIANT_REVERSE, True
+            else:
+                c.variant, c.is_holo = VARIANT_NORMAL, False
 
         issues: list[str] = []
         if len(cards) == self.pack_size:
             issues = self._reconcile(cards)
+            # Every pack guarantees a rare-or-better somewhere in the premium
+            # block — a full pack without one didn't flip cleanly.
+            if not any(rarity_class(c.base_rarity) == RARITY_RARE_PLUS for c in cards):
+                issues.append("no rare-or-better card — every pack guarantees a hit/rare in the last 3 slots")
         elif len(cards) > self.pack_size:
             # More cards than a pack holds = a missed boundary; surface it.
             issues.append(
@@ -295,7 +322,42 @@ class Session:
             self._relabel(dest_pack_obj)
         return True
 
+    def _arrange_for_template(self, cards: list[LoggedCard]) -> Optional[list[LoggedCard]]:
+        """Reorder an edited full pack so each card lands in a slot whose rarity it
+        satisfies (constrained slots filled first, leftovers into the any/reverse
+        slots). This lets an operator drag the right 10 cards into a pack in *any*
+        order and still have it reconcile to COMPLETE. Returns the new order, or
+        None if the composition can't satisfy the template (then it won't COMPLETE).
+        """
+        if len(cards) != self.pack_size:
+            return None
+        pools: dict[str, list[LoggedCard]] = {}
+        for c in cards:
+            pools.setdefault(rarity_class(c.base_rarity), []).append(c)
+        result: list[Optional[LoggedCard]] = [None] * self.pack_size
+        any_slots: list[int] = []
+        for i, slot in enumerate(self.template):
+            if slot.expect_rarity is None:           # reverse-holo slot: any rarity
+                any_slots.append(i)
+                continue
+            pool = pools.get(slot.expect_rarity)
+            if not pool:                             # not enough of this rarity
+                return None
+            result[i] = pool.pop(0)
+        leftovers = [c for pool in pools.values() for c in pool]
+        if len(leftovers) != len(any_slots):
+            return None
+        for i, c in zip(any_slots, leftovers):
+            result[i] = c
+        return result  # every slot filled
+
     def _relabel(self, pack: Pack) -> None:
+        """Re-evaluate an edited pack. Unlike close_pack (which trusts factory
+        order), a manually edited pack is rearranged to fit the template if its
+        composition allows, so moving the right cards in completes it."""
+        arranged = self._arrange_for_template(pack.cards)
+        if arranged is not None:
+            pack.cards[:] = arranged
         pack.status, pack.reconciled, pack.issues = self._label(pack.cards)
 
     def _renumber(self) -> None:

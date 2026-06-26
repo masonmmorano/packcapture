@@ -37,7 +37,7 @@
 <img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Live, in real time** — a threaded recognizer runs on any webcam, OBS Virtual Cam, or a phone-as-webcam while the video stays smooth.<br>
 <img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **In-stream overlay for OBS** — a transparent price ticker + pack-analytics panel viewers see as you scan each card.<br>
 <img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Operator control panel** — a browser cockpit to pick a set + camera, start/stop, watch the live card log, fix mis-scans, and export to CSV/JSON.<br>
-<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Pack-aware** — packs are segmented and labelled (`COMPLETE` / `SPEED_RIPPED` / `NO_HIT`); a per-pack checksum flags any full pack that doesn't reconcile.
+<img src="assets/pokeball.png" width="16" align="absmiddle">&nbsp; **Pack-aware** — knows a pack's shape (**4 commons → 3 uncommons → 3 premium**: two reverse holos plus the guaranteed hit/rare); packs are segmented and labelled (`COMPLETE` / `SPEED_RIPPED` / `NO_HIT`), a per-pack checksum flags any full pack that doesn't reconcile, and you can drag a card to its right pack to fix a missed boundary.
 
 ## Install (Windows, Python 3.10+)
 

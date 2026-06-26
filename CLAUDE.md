@@ -391,6 +391,22 @@ Perceived delay = recognition latency + dwell. Levers, in order of impact:
   OBS *Interact*, never in the captured feed). The cv2 operator overlay
   (`overlay.py`) was left unchanged — this was scoped to the OBS surface. **83
   tests green.**
+- **Overlay reverted to ticker + ONE combined analytics panel (user corrected).**
+  The user clarified: keep the *card price ticker* separate, but SESSION VALUE +
+  per-pack stats belong **together**. Re-merged `#total`/`#perpack` back into one
+  draggable `#analytics` panel (ticker still separate; both draggable + persisted).
+- **Control-panel status line fixed (this was the "off-center" gripe all along —
+  it was `/control`, not `/overlay`).** The `COMPLETE/SPEED/NOHIT` breakdown was a
+  tiny grey hint jammed inline in the totals row; moved to its **own line below**
+  the cards/packs/value row and **color-coded** (green/gold/grey, bold counts).
+- **Pack model → explicit Phantasmal format (user spec).** `standard_template()`
+  is now **4 commons → 3 uncommons → a 3-card premium block** (slots 8–10,
+  `expect_rarity=None`, `VARIANT_REVERSE`): 2 reverse holos + the guaranteed
+  rare/hit, which may sit in **any** of the last 3 slots. `_label` marks the rare+
+  card in the block as the hit (holo, `variant=normal`) and the rest as reverse;
+  a full pack now must contain ≥1 rare+ to earn COMPLETE. See memory
+  `phantasmal-pack-format`. README "Pack-aware" highlight updated. **88 tests green.**
+- All of the above is committed on **`handoff-polish`** and pushed to origin.
 
 ### Next action when resuming (do this first)
 **Stopping point 2026-06-23 (end of day 2):** all live work is on branch

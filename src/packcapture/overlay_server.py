@@ -121,17 +121,15 @@ PAGE = r"""<!DOCTYPE html>
     border-radius: 5px; letter-spacing: 1px;
   }
   #ticker.hit #hit-tag { display: inline-block; }
-  /* Session total — its own draggable panel */
-  #total { right: 40px; bottom: 330px; width: 300px; }
-  #total .label { color: #9a9a9a; font-size: 15px; letter-spacing: 1px; }
+  /* Pack analytics — session value + per-pack stats in ONE draggable panel */
+  #analytics { right: 40px; bottom: 40px; width: 460px; }
+  #analytics h2 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: .5px; }
+  #analytics .setname { color: #9a9a9a; font-size: 15px; margin: 2px 0 14px; letter-spacing: 1px; }
+  #analytics .label { color: #9a9a9a; font-size: 15px; letter-spacing: 1px; }
   #value { font-size: 46px; font-weight: 800; color: #5adc78; margin-top: 4px; }
-  /* Pack analytics — its own draggable panel */
-  #perpack { right: 40px; bottom: 40px; width: 460px; }
-  #perpack h2 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: .5px; }
-  #perpack .setname { color: #9a9a9a; font-size: 15px; margin: 2px 0 14px; letter-spacing: 1px; }
   #counts { display: flex; justify-content: space-between; font-size: 20px; margin: 14px 0 4px;
             border-top: 1px solid #333; padding-top: 12px; }
-  #status { display: flex; gap: 22px; font-size: 17px; font-weight: 600; }
+  #status { display: flex; gap: 26px; font-size: 16px; font-weight: 600; margin: 0 0 16px; }
   #status .complete { color: #5adc78; }
   #status .speed { color: #ffd23c; }
   #status .nohit { color: #9a9a9a; }
@@ -147,20 +145,17 @@ PAGE = r"""<!DOCTYPE html>
     <div id="price"><span class="amt"></span><span class="raw">RAW</span></div>
   </div>
 
-  <div class="panel" id="total">
-    <div class="label">SESSION VALUE</div>
-    <div id="value">$0.00</div>
-  </div>
-
-  <div class="panel" id="perpack">
+  <div class="panel" id="analytics">
     <h2>PACK ANALYTICS</h2>
     <div class="setname"></div>
-    <div id="counts"><span><b id="packs">0</b> packs</span><span><b id="cards">0</b> cards</span></div>
     <div id="status">
       <span class="complete">COMPLETE <b id="s-complete">0</b></span>
       <span class="speed">SPEED <b id="s-speed">0</b></span>
       <span class="nohit">NOHIT <b id="s-nohit">0</b></span>
     </div>
+    <div class="label">SESSION VALUE</div>
+    <div id="value">$0.00</div>
+    <div id="counts"><span><b id="packs">0</b> packs</span><span><b id="cards">0</b> cards</span></div>
     <div id="pack-label"></div>
   </div>
 
@@ -189,7 +184,7 @@ PAGE = r"""<!DOCTYPE html>
       }
     }
     // Analytics
-    document.querySelector("#perpack .setname").textContent = (s.set_name || "").toUpperCase();
+    document.querySelector("#analytics .setname").textContent = (s.set_name || "").toUpperCase();
     set("value", s.total_str);
     set("packs", s.packs);
     set("cards", s.count);
@@ -228,7 +223,7 @@ PAGE = r"""<!DOCTYPE html>
       LS.setItem(key, JSON.stringify({ x: parseInt(p.style.left, 10), y: parseInt(p.style.top, 10) }));
     });
   }
-  ["ticker", "total", "perpack"].forEach(function (id) {
+  ["ticker", "analytics"].forEach(function (id) {
     makeDraggable(document.getElementById(id), "pc_ov_" + id);
   });
 
@@ -466,6 +461,9 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
   tr.sep .st-complete { color: #5adc78; } tr.sep .st-speed { color: #ffd23c; } tr.sep .st-open { color: #8ab4ff; }
   .err { color: #ff7a7a; margin: 8px 0; min-height: 16px; }
   .hint { color: #8a8a8a; font-size: 13px; }
+  .status-line { font-size: 15px; letter-spacing: .5px; margin: -4px 0 16px; min-height: 18px; }
+  .status-line .complete { color: #5adc78; } .status-line .speed { color: #ffd23c; } .status-line .nohit { color: #9a9a9a; }
+  .status-line b { font-weight: 800; }
   a { color: #8ab4ff; }
   label.beta { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer; }
   label.beta span { font-size: 10px; font-weight: 800; letter-spacing: .5px; color: #1a1a1a;
@@ -492,7 +490,6 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
     <span><b id="t-cards">0</b> cards</span>
     <span><b id="t-packs">0</b> packs</span>
     <span>value <b class="val" id="t-value">$0.00</b></span>
-    <span class="hint" id="t-status"></span>
     <span style="margin-left:auto">
       <button class="stop" id="clear">Clear all</button>
       <a class="btn" id="csv" href="/api/export.csv" title="One row per card">Cards CSV</a>
@@ -500,6 +497,7 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
       <a class="btn" id="jsonbtn" href="/api/export.json">JSON</a>
     </span>
   </div>
+  <div class="status-line" id="t-status"></div>
   <div class="hint" style="margin-bottom:14px">Drag a card (⠿) onto another pack to move it; click ✕ to delete a mis-scan. CSV opens directly in Google Sheets (File → Import) / Excel.</div>
   <table>
     <thead><tr><th></th><th>#</th><th>Card</th><th>No.</th><th>Rarity</th><th>Variant</th><th>Price</th><th></th></tr></thead>
@@ -576,7 +574,11 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
     fetch("/api/move", { method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({ index: idx, dest_pack: dest }) }).then(poll);
   });
-  function statusCounts(bs){ return ["COMPLETE "+(bs.complete||0), "SPEED "+(bs.speed_ripped||0), "NOHIT "+(bs.no_hit||0)].join("   "); }
+  function statusCounts(bs){
+    return "<span class='complete'>COMPLETE <b>"+(bs.complete||0)+"</b></span>&nbsp;&nbsp;&nbsp;"+
+           "<span class='speed'>SPEED <b>"+(bs.speed_ripped||0)+"</b></span>&nbsp;&nbsp;&nbsp;"+
+           "<span class='nohit'>NOHIT <b>"+(bs.no_hit||0)+"</b></span>";
+  }
   function poll(){
     if (dragging) return;                 // don't rebuild the table mid-drag
     fetch("/api/state").then(r=>r.json()).then(function(s){
@@ -591,7 +593,7 @@ CONTROL_PAGE = r"""<!DOCTYPE html>
       el("t-cards").textContent = t.cards||0;
       el("t-packs").textContent = t.packs||0;
       el("t-value").textContent = t.value_str||"$0.00";
-      el("t-status").textContent = statusCounts(t.by_status||{});
+      el("t-status").innerHTML = statusCounts(t.by_status||{});
       // Newest first, with a divider row between packs (instead of a pack column).
       var cards = s.cards || [];
       var html = "", lastKey;

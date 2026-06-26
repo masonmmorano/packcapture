@@ -75,16 +75,17 @@ def test_server_serves_overlay_page():
         server.stop()
 
 
-def test_overlay_page_has_split_draggable_panels():
+def test_overlay_page_has_two_draggable_panels():
     server = OverlayServer(port=0).start()
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{server._port}/overlay", timeout=2) as r:
             body = r.read().decode()
-        # Total and per-pack are now separate panels, all three draggable.
-        assert 'id="total"' in body and 'id="perpack"' in body
-        assert "SESSION VALUE" in body
-        assert "makeDraggable" in body and "pc_ov_" in body
-        assert '"ticker", "total", "perpack"' in body
+        # Ticker is its own panel; session value + per-pack stats share the
+        # analytics panel. Both are draggable.
+        assert 'id="ticker"' in body and 'id="analytics"' in body
+        assert "SESSION VALUE" in body and "PACK ANALYTICS" in body
+        assert 'id="total"' not in body and 'id="perpack"' not in body
+        assert "makeDraggable" in body and '"ticker", "analytics"' in body
     finally:
         server.stop()
 
